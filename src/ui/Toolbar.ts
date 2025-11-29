@@ -188,14 +188,17 @@ export class Toolbar {
         
         #top-bar {
           position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
+          top: 10px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 66%;
+          max-width: 700px;
           height: 32px;
           background: rgba(22, 33, 62, 0.95);
+          border-radius: 8px;
           display: flex;
           align-items: center;
-          padding: 0 12px;
+          padding: 0 16px;
           gap: 16px;
           z-index: 1000;
           box-shadow: 0 2px 8px rgba(0,0,0,0.4);
