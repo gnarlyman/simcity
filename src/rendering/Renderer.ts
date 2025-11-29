@@ -6,9 +6,9 @@
  */
 
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import type { RenderLayer, Bounds, GridPosition, TerrainCell, ZoneCell, RoadConnections } from '../data/types';
+import type { RenderLayer, Bounds, GridPosition, TerrainCell, ZoneCell, RoadConnections, PowerCell, PowerConnections, PowerPlantType } from '../data/types';
 import { RENDER_LAYER_ORDER } from '../data/types';
-import { TERRAIN_COLORS, UI_COLORS, ZONE_COLORS } from '../data/constants';
+import { TERRAIN_COLORS, UI_COLORS, ZONE_COLORS, POWER_COLORS, POWER_PLANT_CONFIGS } from '../data/constants';
 import { TILE_WIDTH, TILE_HEIGHT, HALF_TILE_WIDTH, HALF_TILE_HEIGHT, TILE_DEPTH } from '../data/constants';
 import { IsometricCamera } from './IsometricCamera';
 import { Grid } from '../data/Grid';
@@ -62,6 +62,12 @@ export class Renderer {
   /** Road graphics */
   private roadGraphics: Graphics | null = null;
   
+  /** Power graphics */
+  private powerGraphics: Graphics | null = null;
+  
+  /** Power overlay graphics (shows powered areas) */
+  private powerOverlay: Graphics | null = null;
+  
   /** Debug text */
   private debugText: Text | null = null;
   
@@ -70,6 +76,9 @@ export class Renderer {
   
   /** Show zone overlay */
   private showZones = true;
+  
+  /** Show power overlay */
+  private showPower = false;
   
   /** Show debug info */
   private showDebug = true;
@@ -227,6 +236,23 @@ export class Renderer {
    */
   isShowingZones(): boolean {
     return this.showZones;
+  }
+
+  /**
+   * Toggle power overlay
+   */
+  setShowPower(show: boolean): void {
+    this.showPower = show;
+    if (this.powerOverlay) {
+      this.powerOverlay.visible = show;
+    }
+  }
+
+  /**
+   * Check if power overlay is visible
+   */
+  isShowingPower(): boolean {
+    return this.showPower;
   }
 
   /**
@@ -654,6 +680,288 @@ export class Renderer {
     terrainGrid: Grid<TerrainCell>
   ): void {
     this.renderRoads(roadGrid, terrainGrid);
+  }
+
+  /**
+   * Render power infrastructure (power lines and plants)
+   */
+  renderPower(
+    powerGrid: Grid<PowerCell>,
+    terrainGrid: Grid<TerrainCell>,
+    poweredPositions: Set<string>
+  ): void {
+    const roadsLayer = this.getLayer('roads'); // Power lines render on roads layer
+
+    // Clear existing power graphics
+    if (this.powerGraphics) {
+      roadsLayer.removeChild(this.powerGraphics);
+      this.powerGraphics.destroy();
+    }
+
+    this.powerGraphics = new Graphics();
+    roadsLayer.addChild(this.powerGraphics);
+
+    // Clear existing power overlay
+    const overlayLayer = this.getLayer('overlay');
+    if (this.powerOverlay) {
+      overlayLayer.removeChild(this.powerOverlay);
+      this.powerOverlay.destroy();
+    }
+
+    this.powerOverlay = new Graphics();
+    this.powerOverlay.visible = this.showPower;
+    overlayLayer.addChild(this.powerOverlay);
+
+    const width = powerGrid.width;
+    const height = powerGrid.height;
+
+    // Render power overlay first (powered areas)
+    if (this.showPower) {
+      for (let sum = 0; sum < width + height - 1; sum++) {
+        for (let x = 0; x <= sum; x++) {
+          const y = sum - x;
+          if (x < width && y < height) {
+            const isPowered = poweredPositions.has(`${x},${y}`);
+            const terrainCell = terrainGrid.tryGetXY(x, y);
+            if (terrainCell) {
+              this.renderPowerOverlayTile(x, y, isPowered, terrainCell);
+            }
+          }
+        }
+      }
+    }
+
+    // Render power infrastructure in isometric order (back to front)
+    for (let sum = 0; sum < width + height - 1; sum++) {
+      for (let x = 0; x <= sum; x++) {
+        const y = sum - x;
+        if (x < width && y < height) {
+          const powerCell = powerGrid.getXY(x, y);
+          if (powerCell.hasPowerLine || powerCell.hasPowerPlant) {
+            const terrainCell = terrainGrid.tryGetXY(x, y);
+            this.renderPowerTile(x, y, powerCell, terrainCell);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Render a power overlay tile (shows powered/unpowered status)
+   */
+  private renderPowerOverlayTile(
+    worldX: number,
+    worldY: number,
+    isPowered: boolean,
+    terrainCell: TerrainCell
+  ): void {
+    if (!this.powerOverlay) return;
+
+    // Calculate screen position
+    const isoX = (worldX - worldY) * HALF_TILE_WIDTH;
+    const isoY = (worldX + worldY) * HALF_TILE_HEIGHT;
+    const elevationOffset = (terrainCell.elevation - 250) / 50 * TILE_DEPTH;
+
+    // Draw power status overlay
+    const color = isPowered ? POWER_COLORS.powered : POWER_COLORS.unpowered;
+    const alpha = 0.2;
+
+    this.powerOverlay.poly([
+      isoX, isoY - HALF_TILE_HEIGHT - elevationOffset,
+      isoX + HALF_TILE_WIDTH, isoY - elevationOffset,
+      isoX, isoY + HALF_TILE_HEIGHT - elevationOffset,
+      isoX - HALF_TILE_WIDTH, isoY - elevationOffset,
+    ]);
+    this.powerOverlay.fill({ color, alpha });
+  }
+
+  /**
+   * Render a single power tile (power line or power plant)
+   */
+  private renderPowerTile(
+    worldX: number,
+    worldY: number,
+    powerCell: PowerCell,
+    terrainCell: TerrainCell | undefined
+  ): void {
+    if (!this.powerGraphics) return;
+
+    // Calculate screen position
+    const isoX = (worldX - worldY) * HALF_TILE_WIDTH;
+    const isoY = (worldX + worldY) * HALF_TILE_HEIGHT;
+
+    // Adjust for elevation
+    const elevation = terrainCell?.elevation ?? 250;
+    const elevationOffset = (elevation - 250) / 50 * TILE_DEPTH;
+
+    if (powerCell.hasPowerPlant && powerCell.powerPlantType) {
+      this.renderPowerPlant(isoX, isoY - elevationOffset, powerCell.powerPlantType);
+    } else if (powerCell.hasPowerLine) {
+      this.renderPowerLine(isoX, isoY - elevationOffset, powerCell.connections, powerCell.powered);
+    }
+  }
+
+  /**
+   * Render a power plant
+   */
+  private renderPowerPlant(isoX: number, isoY: number, plantType: PowerPlantType): void {
+    if (!this.powerGraphics) return;
+
+    const config = POWER_PLANT_CONFIGS[plantType];
+    const color = config.color;
+    const buildingHeight = 20;
+
+    const halfWidth = HALF_TILE_WIDTH * 0.7;
+    const halfHeight = HALF_TILE_HEIGHT * 0.7;
+
+    // Draw building base (left side)
+    this.powerGraphics.poly([
+      isoX - halfWidth, isoY,
+      isoX, isoY + halfHeight,
+      isoX, isoY + halfHeight - buildingHeight,
+      isoX - halfWidth, isoY - buildingHeight,
+    ]);
+    this.powerGraphics.fill(this.darkenColor(color, 0.3));
+
+    // Draw building base (right side)
+    this.powerGraphics.poly([
+      isoX + halfWidth, isoY,
+      isoX, isoY + halfHeight,
+      isoX, isoY + halfHeight - buildingHeight,
+      isoX + halfWidth, isoY - buildingHeight,
+    ]);
+    this.powerGraphics.fill(this.darkenColor(color, 0.1));
+
+    // Draw roof
+    this.powerGraphics.poly([
+      isoX, isoY - halfHeight - buildingHeight,
+      isoX + halfWidth, isoY - buildingHeight,
+      isoX, isoY + halfHeight - buildingHeight,
+      isoX - halfWidth, isoY - buildingHeight,
+    ]);
+    this.powerGraphics.fill(color);
+
+    // Draw smoke stack for coal/gas plants
+    if (plantType === 'coal' || plantType === 'gas') {
+      const stackX = isoX + 5;
+      const stackY = isoY - buildingHeight - 5;
+      this.powerGraphics.rect(stackX - 3, stackY - 10, 6, 10);
+      this.powerGraphics.fill(0x666666);
+    }
+
+    // Draw cooling tower for nuclear
+    if (plantType === 'nuclear') {
+      this.powerGraphics.circle(isoX - 8, isoY - buildingHeight - 8, 6);
+      this.powerGraphics.fill(0xcccccc);
+    }
+
+    // Draw blades for wind
+    if (plantType === 'wind') {
+      const bladeLength = 12;
+      this.powerGraphics.moveTo(isoX, isoY - buildingHeight - 5);
+      this.powerGraphics.lineTo(isoX, isoY - buildingHeight - 5 - bladeLength);
+      this.powerGraphics.stroke({ color: 0xffffff, width: 2 });
+      this.powerGraphics.moveTo(isoX, isoY - buildingHeight - 5);
+      this.powerGraphics.lineTo(isoX + bladeLength * 0.866, isoY - buildingHeight - 5 + bladeLength * 0.5);
+      this.powerGraphics.stroke({ color: 0xffffff, width: 2 });
+      this.powerGraphics.moveTo(isoX, isoY - buildingHeight - 5);
+      this.powerGraphics.lineTo(isoX - bladeLength * 0.866, isoY - buildingHeight - 5 + bladeLength * 0.5);
+      this.powerGraphics.stroke({ color: 0xffffff, width: 2 });
+    }
+
+    // Draw panels for solar
+    if (plantType === 'solar') {
+      this.powerGraphics.poly([
+        isoX - 10, isoY - 5,
+        isoX + 10, isoY - 5,
+        isoX + 8, isoY - 12,
+        isoX - 8, isoY - 12,
+      ]);
+      this.powerGraphics.fill(0x3366cc);
+    }
+  }
+
+  /**
+   * Render a power line
+   */
+  private renderPowerLine(isoX: number, isoY: number, connections: PowerConnections, powered: boolean): void {
+    if (!this.powerGraphics) return;
+
+    const lineColor = powered ? POWER_COLORS.powerLine : 0x666666;
+    const poleColor = 0x8b4513;
+    const poleHeight = 16;
+
+    // Draw pole
+    this.powerGraphics.rect(isoX - 2, isoY - poleHeight, 4, poleHeight);
+    this.powerGraphics.fill(poleColor);
+
+    // Draw cross arm
+    this.powerGraphics.rect(isoX - 10, isoY - poleHeight + 2, 20, 3);
+    this.powerGraphics.fill(poleColor);
+
+    const { north, south, east, west } = connections;
+    
+    // Diamond tile corners for proper isometric alignment
+    const topY = isoY - HALF_TILE_HEIGHT;
+    const rightX = isoX + HALF_TILE_WIDTH;
+    const rightY = isoY;
+    const bottomY = isoY + HALF_TILE_HEIGHT;
+    const leftX = isoX - HALF_TILE_WIDTH;
+    const leftY = isoY;
+    
+    // Center of the diamond (at pole top)
+    const cx = isoX;
+    const cy = isoY - poleHeight + 2;
+    
+    // Midpoints of each edge
+    const northMidX = (isoX + rightX) / 2;
+    const northMidY = (topY + rightY) / 2 - poleHeight + 2;
+    const southMidX = (isoX + leftX) / 2;
+    const southMidY = (bottomY + leftY) / 2 - poleHeight + 2;
+    const eastMidX = (rightX + isoX) / 2;
+    const eastMidY = (rightY + bottomY) / 2 - poleHeight + 2;
+    const westMidX = (leftX + isoX) / 2;
+    const westMidY = (leftY + topY) / 2 - poleHeight + 2;
+
+    // Draw wires to connected neighbors
+    if (north) {
+      this.powerGraphics.moveTo(cx, cy);
+      this.powerGraphics.lineTo(northMidX, northMidY);
+      this.powerGraphics.stroke({ color: lineColor, width: 2 });
+    }
+    if (south) {
+      this.powerGraphics.moveTo(cx, cy);
+      this.powerGraphics.lineTo(southMidX, southMidY);
+      this.powerGraphics.stroke({ color: lineColor, width: 2 });
+    }
+    if (east) {
+      this.powerGraphics.moveTo(cx, cy);
+      this.powerGraphics.lineTo(eastMidX, eastMidY);
+      this.powerGraphics.stroke({ color: lineColor, width: 2 });
+    }
+    if (west) {
+      this.powerGraphics.moveTo(cx, cy);
+      this.powerGraphics.lineTo(westMidX, westMidY);
+      this.powerGraphics.stroke({ color: lineColor, width: 2 });
+    }
+
+    // If no connections, draw a small indicator
+    const connectionCount = [north, south, east, west].filter(Boolean).length;
+    if (connectionCount === 0) {
+      this.powerGraphics.circle(cx, cy, 3);
+      this.powerGraphics.fill(lineColor);
+    }
+  }
+
+  /**
+   * Update power rendering (call when power infrastructure changes)
+   */
+  updatePowerOverlay(
+    powerGrid: Grid<PowerCell>,
+    terrainGrid: Grid<TerrainCell>,
+    poweredPositions: Set<string>
+  ): void {
+    this.renderPower(powerGrid, terrainGrid, poweredPositions);
   }
 
   /**

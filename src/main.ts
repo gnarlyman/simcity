@@ -11,12 +11,13 @@ import { TerrainSystem } from './systems/TerrainSystem';
 import { ZoneSystem, createZoneSystem } from './systems/ZoneSystem';
 import { RoadSystem, createRoadSystem } from './systems/RoadSystem';
 import { RCIDemandSystem, createRCIDemandSystem } from './systems/RCIDemandSystem';
+import { PowerSystem, createPowerSystem } from './systems/PowerSystem';
 import { InputManager } from './input/InputManager';
 import { Toolbar, createToolbar, Tool } from './ui/Toolbar';
 import { EventBus, EventTypes } from './core/EventBus';
-import type { GridPosition, TerrainCell, SimulationSpeed, ZoneType } from './data/types';
+import type { GridPosition, TerrainCell, SimulationSpeed, ZoneType, PowerPlantType } from './data/types';
 import { Grid } from './data/Grid';
-import { ZONE_TYPES } from './data/constants';
+import { ZONE_TYPES, POWER_PLANT_CONFIGS } from './data/constants';
 
 /**
  * Game class - main application controller
@@ -28,6 +29,7 @@ class Game {
   private zoneSystem: ZoneSystem;
   private roadSystem: RoadSystem;
   private rciDemandSystem: RCIDemandSystem;
+  private powerSystem: PowerSystem;
   private inputManager: InputManager | null = null;
   private toolbar: Toolbar | null = null;
   private canvas: HTMLCanvasElement;
@@ -40,6 +42,9 @@ class Game {
   
   // Zone overlay toggle
   private showZoneOverlay = true;
+  
+  // Power overlay toggle
+  private showPowerOverlay = false;
   
   // Grid toggle state
   private showGridOverlay = false;
@@ -64,11 +69,13 @@ class Game {
     this.zoneSystem = createZoneSystem();
     this.roadSystem = createRoadSystem();
     this.rciDemandSystem = createRCIDemandSystem();
+    this.powerSystem = createPowerSystem();
     
     // Register systems with engine (order matters for initialization)
     const world = this.engine.getWorld();
     world.addSystem(this.terrainSystem);
     world.addSystem(this.roadSystem);
+    world.addSystem(this.powerSystem);
     world.addSystem(this.zoneSystem);
     world.addSystem(this.rciDemandSystem);
   }
@@ -106,6 +113,7 @@ class Game {
       // Initialize grids to match terrain
       this.zoneSystem.initializeGrid(64, 64);
       this.roadSystem.initializeGrid(64, 64);
+      this.powerSystem.initializeGrid(64, 64);
       
       // Render terrain
       this.renderer.renderTerrain(this.terrainGrid);
@@ -113,6 +121,7 @@ class Game {
       // Initial overlays render (empty)
       this.updateZoneOverlay();
       this.updateRoadOverlay();
+      this.updatePowerOverlay();
       
       // Set up render callback
       this.engine.setRenderCallback((deltaTime) => this.render(deltaTime));
@@ -135,8 +144,10 @@ class Game {
       console.log('  - Right-click + Drag: Pan camera');
       console.log('  - G: Toggle grid overlay');
       console.log('  - Z: Toggle zone overlay');
+      console.log('  - X: Toggle power overlay');
       console.log('  - Space: Regenerate terrain');
       console.log('  - R: Road tool');
+      console.log('  - P: Power line tool');
       console.log('  - 1-9: Select zone tools');
       console.log('  - Q: Query tool');
       console.log('  - B: Bulldoze tool');
@@ -173,6 +184,7 @@ class Game {
         const terrainInfo = this.terrainSystem.getTerrainInfo(position.x, position.y);
         const zoneInfo = this.zoneSystem.getZoneCell(position);
         const roadInfo = this.roadSystem.getRoadCell(position);
+        const powerInfo = this.powerSystem.getPowerCell(position);
         
         if (terrainInfo) {
           console.log(`Clicked tile (${position.x}, ${position.y}):`, {
@@ -181,6 +193,9 @@ class Game {
             water: terrainInfo.waterDepth > 0 ? `depth: ${terrainInfo.waterDepth.toFixed(1)}` : 'none',
             buildable: this.terrainSystem.isBuildable(position.x, position.y),
             road: roadInfo?.hasRoad ? 'yes' : 'no',
+            power: powerInfo?.hasPowerPlant ? `plant (${powerInfo.powerPlantType})` : 
+                   powerInfo?.hasPowerLine ? 'line' : 
+                   this.powerSystem.hasPower(position) ? 'powered' : 'no power',
             zone: zoneInfo?.zoneType ? `${zoneInfo.zoneType.category} (${zoneInfo.zoneType.density})` : 'none',
             developed: zoneInfo?.developed ?? false,
           });
@@ -257,6 +272,33 @@ class Game {
       this.updateRoadOverlay();
       this.zoneSystem.updateRoadAccess(this.roadSystem.getRoadPositions());
     });
+
+    // Listen for power changes
+    eventBus.on('power:line_created', () => {
+      this.updatePowerOverlay();
+      // Update power status for all zones
+      this.zoneSystem.updateUtilities(this.powerSystem.getPoweredPositions(), new Set());
+    });
+    
+    eventBus.on('power:line_deleted', () => {
+      this.updatePowerOverlay();
+      this.zoneSystem.updateUtilities(this.powerSystem.getPoweredPositions(), new Set());
+    });
+
+    eventBus.on('power:plant_created', () => {
+      this.updatePowerOverlay();
+      this.zoneSystem.updateUtilities(this.powerSystem.getPoweredPositions(), new Set());
+    });
+    
+    eventBus.on('power:plant_deleted', () => {
+      this.updatePowerOverlay();
+      this.zoneSystem.updateUtilities(this.powerSystem.getPoweredPositions(), new Set());
+    });
+
+    eventBus.on('power:grid_updated', () => {
+      this.updatePowerOverlay();
+      this.zoneSystem.updateUtilities(this.powerSystem.getPoweredPositions(), new Set());
+    });
     
     // Listen for building development to update overlay
     eventBus.on(EventTypes.BUILDING_DEVELOPED, () => {
@@ -284,6 +326,14 @@ class Game {
         this.showZoneOverlay = !this.showZoneOverlay;
         this.renderer.setShowZones(this.showZoneOverlay);
         console.log(`Zone overlay ${this.showZoneOverlay ? 'shown' : 'hidden'}`);
+      }
+      
+      // X - Toggle power overlay
+      if (key === 'x') {
+        this.showPowerOverlay = !this.showPowerOverlay;
+        this.renderer.setShowPower(this.showPowerOverlay);
+        this.updatePowerOverlay();
+        console.log(`Power overlay ${this.showPowerOverlay ? 'shown' : 'hidden'}`);
       }
       
       // Space - Regenerate terrain
@@ -340,6 +390,20 @@ class Game {
   }
 
   /**
+   * Update power overlay rendering
+   */
+  private updatePowerOverlay(): void {
+    const powerGrid = this.powerSystem.getPowerGrid();
+    if (powerGrid && this.terrainGrid) {
+      this.renderer.updatePowerOverlay(
+        powerGrid, 
+        this.terrainGrid, 
+        this.powerSystem.getPoweredPositions()
+      );
+    }
+  }
+
+  /**
    * Regenerate terrain with new seed
    */
   private regenerateTerrain(): void {
@@ -354,11 +418,13 @@ class Game {
     // Reset grids
     this.zoneSystem.initializeGrid(64, 64);
     this.roadSystem.initializeGrid(64, 64);
+    this.powerSystem.initializeGrid(64, 64);
     
     // Re-render
     this.renderer.renderTerrain(this.terrainGrid);
     this.updateZoneOverlay();
     this.updateRoadOverlay();
+    this.updatePowerOverlay();
     
     console.log('Terrain regenerated!');
   }
@@ -372,8 +438,22 @@ class Game {
       return;
     }
     
-    // For zone, road, and bulldoze tools, use two-click placement
-    if (tool.category === 'zone' || tool.category === 'road' || tool.category === 'bulldoze') {
+    // Power plants are single-click placement (they take up multiple tiles)
+    if (tool.category === 'power' && tool.id !== 'power:line') {
+      const plantType = tool.id.replace('power:', '') as PowerPlantType;
+      if (this.terrainSystem.isBuildable(position.x, position.y)) {
+        const success = this.powerSystem.placePowerPlant(position, plantType);
+        if (success) {
+          console.log(`Placed ${plantType} power plant at (${position.x}, ${position.y})`);
+        } else {
+          console.log(`Cannot place power plant at (${position.x}, ${position.y})`);
+        }
+      }
+      return;
+    }
+    
+    // For zone, road, power line, and bulldoze tools, use two-click placement
+    if (tool.category === 'zone' || tool.category === 'road' || tool.category === 'power' || tool.category === 'bulldoze') {
       if (!this.isInPlacementMode) {
         // First click: start placement mode
         this.placementStart = position;
@@ -422,12 +502,22 @@ class Game {
           this.roadSystem.placeRoad(cell);
         }
       }
+    } else if (tool.category === 'power' && tool.id === 'power:line') {
+      // Power lines use line
+      const cells = this.getLineCells(start, end);
+      for (const cell of cells) {
+        if (this.terrainSystem.isBuildable(cell.x, cell.y)) {
+          this.powerSystem.placePowerLine(cell);
+        }
+      }
     } else if (tool.category === 'bulldoze') {
       // Bulldoze uses rectangle
       const cells = this.getRectangleCells(start, end);
       for (const cell of cells) {
         this.zoneSystem.removeZone(cell);
         this.roadSystem.removeRoad(cell);
+        this.powerSystem.removePowerLine(cell);
+        this.powerSystem.removePowerPlant(cell);
       }
     }
   }
@@ -450,8 +540,8 @@ class Game {
 
     // Get cells based on tool type
     let cells: GridPosition[];
-    if (currentTool.category === 'road') {
-      // Roads use straight line preview
+    if (currentTool.category === 'road' || (currentTool.category === 'power' && currentTool.id === 'power:line')) {
+      // Roads and power lines use straight line preview
       cells = this.getLineCells(start, end);
     } else {
       // Zones and bulldoze use rectangle preview
@@ -472,6 +562,8 @@ class Game {
     let color = 0x00ff00; // Green for zones
     if (currentTool.category === 'road') {
       color = 0x888888; // Gray for roads
+    } else if (currentTool.category === 'power') {
+      color = 0xffaa00; // Orange for power
     } else if (currentTool.category === 'bulldoze') {
       color = 0xff0000; // Red for bulldoze
     }
@@ -510,6 +602,14 @@ class Game {
       for (const cell of cells) {
         if (this.terrainSystem.isBuildable(cell.x, cell.y)) {
           this.roadSystem.placeRoad(cell);
+        }
+      }
+    } else if (tool.category === 'power' && tool.id === 'power:line') {
+      // Power lines use line drag
+      const cells = this.getLineCells(startTile, endTile);
+      for (const cell of cells) {
+        if (this.terrainSystem.isBuildable(cell.x, cell.y)) {
+          this.powerSystem.placePowerLine(cell);
         }
       }
     } else if (tool.category === 'bulldoze') {
@@ -614,6 +714,12 @@ class Game {
       this.roadSystem.clearDirty();
     }
     
+    // Check if power needs re-rendering
+    if (this.powerSystem.isDirty()) {
+      this.updatePowerOverlay();
+      this.powerSystem.clearDirty();
+    }
+    
     // Update debug text
     const stats = this.engine.getStats();
     const camera = this.renderer.getCamera();
@@ -624,6 +730,8 @@ class Game {
       const terrain = this.terrainSystem.getTerrainInfo(hoveredTile.x, hoveredTile.y);
       const zone = this.zoneSystem.getZoneCell(hoveredTile);
       const road = this.roadSystem.hasRoad(hoveredTile);
+      const power = this.powerSystem.hasPower(hoveredTile);
+      const powerCell = this.powerSystem.getPowerCell(hoveredTile);
       if (terrain) {
         const category = zone?.zoneType?.category;
         const isDeveloped = zone?.developed ?? false;
@@ -631,7 +739,10 @@ class Game {
           ? ` | ${category[0].toUpperCase()}${isDeveloped ? '*' : ''}` 
           : '';
         const roadStr = road ? ' | Road' : '';
-        hoverInfo = `(${hoveredTile.x}, ${hoveredTile.y})${roadStr}${zoneStr}`;
+        const powerStr = powerCell?.hasPowerPlant ? ' | Plant' : 
+                         powerCell?.hasPowerLine ? ' | PLine' : 
+                         power ? ' | ⚡' : '';
+        hoverInfo = `(${hoveredTile!.x}, ${hoveredTile!.y})${roadStr}${powerStr}${zoneStr}`;
         
         // Show placement preview or single tile hover highlight
         if (this.isInPlacementMode && this.placementStart && this.terrainGrid) {
@@ -644,12 +755,14 @@ class Game {
       this.renderer.clearHighlight();
     }
     
+    const powerStats = this.powerSystem.getPowerStats();
     this.renderer.updateDebugText({
       FPS: stats.fps,
       Zoom: camera.getZoom().toFixed(2),
       Tile: hoverInfo,
       Pop: this.rciDemandSystem.getPopulation(),
       Roads: this.roadSystem.getRoadStats().totalTiles,
+      Power: `${Math.round(powerStats.totalCapacity)}MW`,
     });
     
     // Update toolbar population

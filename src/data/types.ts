@@ -237,6 +237,42 @@ export interface RoadConnections {
 }
 
 // ============================================================================
+// Power Types
+// ============================================================================
+
+/** Power plant type variants */
+export type PowerPlantType = 'coal' | 'gas' | 'nuclear' | 'wind' | 'solar';
+
+/** Power line connection flags */
+export interface PowerConnections {
+  north: boolean;
+  south: boolean;
+  east: boolean;
+  west: boolean;
+}
+
+/** Power cell data */
+export interface PowerCell {
+  position: GridPosition;
+  hasPowerLine: boolean;
+  hasPowerPlant: boolean;
+  powerPlantType: PowerPlantType | null;
+  powered: boolean;
+  connections: PowerConnections;
+}
+
+/** Power plant definition */
+export interface PowerPlant {
+  id: string;
+  type: PowerPlantType;
+  position: GridPosition;
+  capacity: number;      // MW
+  currentOutput: number; // MW
+  efficiency: number;    // 0-1
+  maintenanceCost: number; // per month
+}
+
+// ============================================================================
 // Rendering Types
 // ============================================================================
 

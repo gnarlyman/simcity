@@ -6,8 +6,8 @@
  */
 
 import { EventBus, EventTypes } from '../core/EventBus';
-import type { ZoneCategory, ZoneDensity, DemandState } from '../data/types';
-import { ZONE_TYPES, ZONE_COLORS, UI_COLORS } from '../data/constants';
+import type { ZoneCategory, ZoneDensity, DemandState, PowerPlantType } from '../data/types';
+import { ZONE_TYPES, ZONE_COLORS, UI_COLORS, POWER_PLANT_CONFIGS } from '../data/constants';
 
 /**
  * Tool definition
@@ -16,7 +16,7 @@ export interface Tool {
   id: string;
   name: string;
   icon: string;
-  category: 'zone' | 'road' | 'bulldoze' | 'query' | 'other';
+  category: 'zone' | 'road' | 'bulldoze' | 'query' | 'power' | 'other';
   hotkey?: string;
 }
 
@@ -32,6 +32,14 @@ export const TOOLS: Tool[] = [
   
   // Roads
   { id: 'road', name: 'Road', icon: '🛣️', category: 'road', hotkey: 'r' },
+  
+  // Power infrastructure
+  { id: 'power:line', name: 'Power Line', icon: '⚡', category: 'power', hotkey: 'p' },
+  { id: 'power:coal', name: 'Coal Plant', icon: '🏭', category: 'power' },
+  { id: 'power:gas', name: 'Gas Plant', icon: '⛽', category: 'power' },
+  { id: 'power:nuclear', name: 'Nuclear', icon: '☢️', category: 'power' },
+  { id: 'power:wind', name: 'Wind Farm', icon: '🌬️', category: 'power' },
+  { id: 'power:solar', name: 'Solar Farm', icon: '☀️', category: 'power' },
   
   // Residential zones
   { id: 'zone:r-low', name: 'Res Low', icon: '🏠', category: 'zone', hotkey: '1' },
@@ -334,11 +342,22 @@ export class Toolbar {
     const queryTool = TOOLS.find(t => t.id === 'query')!;
     const bulldozeTool = TOOLS.find(t => t.id === 'bulldoze')!;
     const roadTool = TOOLS.find(t => t.id === 'road')!;
+    const powerLineTool = TOOLS.find(t => t.id === 'power:line')!;
     
     toolsHtml.push(this.createToolButton(queryTool));
     toolsHtml.push(this.createToolButton(bulldozeTool));
     toolsHtml.push('<div class="toolbar-divider"></div>');
     toolsHtml.push(this.createToolButton(roadTool));
+    toolsHtml.push(this.createToolButton(powerLineTool));
+    toolsHtml.push('<div class="toolbar-divider"></div>');
+    
+    // Power plants
+    toolsHtml.push('<span class="toolbar-section-label">⚡</span>');
+    toolsHtml.push('<div class="zone-group">');
+    TOOLS.filter(t => t.category === 'power' && t.id !== 'power:line').forEach(tool => {
+      toolsHtml.push(this.createToolButton(tool));
+    });
+    toolsHtml.push('</div>');
     toolsHtml.push('<div class="toolbar-divider"></div>');
     
     // Residential zones

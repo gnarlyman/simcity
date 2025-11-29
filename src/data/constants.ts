@@ -2,7 +2,7 @@
  * Game Constants and Configuration
  */
 
-import type { ZoneType, ZoneDensity, ZoneCategory } from './types';
+import type { ZoneType, ZoneDensity, ZoneCategory, PowerPlantType } from './types';
 
 // ============================================================================
 // Tile Dimensions (Isometric 2:1)
@@ -344,3 +344,112 @@ export const SHOW_CHUNK_BORDERS = false;
 
 /** Show coordinate labels */
 export const SHOW_COORDINATES = false;
+
+// ============================================================================
+// Power Configuration
+// ============================================================================
+
+/** Power plant configurations */
+export interface PowerPlantConfig {
+  name: string;
+  capacity: number;       // MW
+  cost: number;           // Build cost
+  maintenanceCost: number; // Per month
+  efficiency: number;     // 0-1 base efficiency
+  pollution: number;      // 0-1 pollution factor
+  size: { width: number; height: number }; // Grid size
+  color: number;          // Display color
+  icon: string;           // Display icon
+}
+
+/** Power plant type configurations */
+export const POWER_PLANT_CONFIGS: Record<PowerPlantType, PowerPlantConfig> = {
+  coal: {
+    name: 'Coal Power Plant',
+    capacity: 200,
+    cost: 4000,
+    maintenanceCost: 100,
+    efficiency: 0.85,
+    pollution: 0.8,
+    size: { width: 3, height: 3 },
+    color: 0x444444,
+    icon: '🏭',
+  },
+  gas: {
+    name: 'Gas Power Plant',
+    capacity: 150,
+    cost: 3000,
+    maintenanceCost: 80,
+    efficiency: 0.9,
+    pollution: 0.4,
+    size: { width: 2, height: 2 },
+    color: 0x6688aa,
+    icon: '⛽',
+  },
+  nuclear: {
+    name: 'Nuclear Power Plant',
+    capacity: 500,
+    cost: 15000,
+    maintenanceCost: 200,
+    efficiency: 0.95,
+    pollution: 0.1,
+    size: { width: 4, height: 4 },
+    color: 0x00ff88,
+    icon: '☢️',
+  },
+  wind: {
+    name: 'Wind Farm',
+    capacity: 50,
+    cost: 1000,
+    maintenanceCost: 20,
+    efficiency: 0.35,
+    pollution: 0,
+    size: { width: 1, height: 1 },
+    color: 0xcccccc,
+    icon: '🌬️',
+  },
+  solar: {
+    name: 'Solar Farm',
+    capacity: 75,
+    cost: 1500,
+    maintenanceCost: 10,
+    efficiency: 0.25,
+    pollution: 0,
+    size: { width: 2, height: 2 },
+    color: 0xffdd00,
+    icon: '☀️',
+  },
+};
+
+/** Power line cost per tile */
+export const POWER_LINE_COST = 5;
+
+/** Power transmission range from power lines */
+export const POWER_TRANSMISSION_RANGE = 4;
+
+/** Power consumption per zone tile (MW) */
+export const ZONE_POWER_CONSUMPTION: Record<ZoneCategory, Record<ZoneDensity, number>> = {
+  residential: {
+    low: 1,
+    medium: 3,
+    high: 8,
+  },
+  commercial: {
+    low: 2,
+    medium: 5,
+    high: 15,
+  },
+  industrial: {
+    low: 5,
+    medium: 10,
+    high: 25,
+  },
+};
+
+/** Power overlay colors */
+export const POWER_COLORS = {
+  powered: 0x00ff00,      // Green - has power
+  unpowered: 0xff0000,    // Red - no power
+  powerLine: 0xffaa00,    // Orange - power line
+  powerPlant: 0xffff00,   // Yellow - power plant
+};
