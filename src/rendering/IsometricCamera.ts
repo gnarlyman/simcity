@@ -105,9 +105,16 @@ export class IsometricCamera {
 
   /**
    * Get grid position from screen coordinates (rounded to integers)
+   * Uses proper isometric tile picking with visual offset correction
    */
   screenToGrid(screenX: number, screenY: number): GridPosition {
-    const world = this.screenToWorld(screenX, screenY);
+    // Apply a correction to account for the isometric visual offset
+    // The tile "center" visually appears shifted from the mathematical center
+    // Adding TILE_HEIGHT (full tile) to screenY before conversion corrects this
+    const correctedY = screenY + TILE_HEIGHT * this.zoom;
+    
+    const world = this.screenToWorld(screenX, correctedY);
+    // Floor gives the tile containing the point
     return {
       x: Math.floor(world.x),
       y: Math.floor(world.y),

@@ -73,6 +73,9 @@ export class Renderer {
   
   /** Show debug info */
   private showDebug = true;
+  
+  /** Hover highlight graphics */
+  private hoverHighlight: Graphics | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -546,10 +549,10 @@ export class Renderer {
     const elevation = terrainCell?.elevation ?? 250;
     const elevationOffset = (elevation - 250) / 50 * TILE_DEPTH;
 
-    const roadColor = 0x444444; // Dark gray
-    const lineColor = 0xffffff; // White road markings
+    const roadColor = 0x555555; // Dark gray
+    const lineColor = 0xffff00; // Yellow center line
 
-    // Draw road base
+    // Draw road base (darker)
     this.roadGraphics.poly([
       isoX, isoY - HALF_TILE_HEIGHT - elevationOffset,
       isoX + HALF_TILE_WIDTH, isoY - elevationOffset,
@@ -559,47 +562,85 @@ export class Renderer {
     this.roadGraphics.fill(roadColor);
     this.roadGraphics.stroke({ color: 0x333333, width: 1 });
 
-    // Draw road markings based on connections
     const { north, south, east, west } = roadCell.connections;
-    const markingColor = 0xcccccc;
-    const markingWidth = 2;
-
-    // Center point
+    
+    // Diamond tile corners for proper isometric alignment
+    // North = top vertex, South = bottom vertex, East = right vertex, West = left vertex
+    const topX = isoX;
+    const topY = isoY - HALF_TILE_HEIGHT - elevationOffset;
+    const rightX = isoX + HALF_TILE_WIDTH;
+    const rightY = isoY - elevationOffset;
+    const bottomX = isoX;
+    const bottomY = isoY + HALF_TILE_HEIGHT - elevationOffset;
+    const leftX = isoX - HALF_TILE_WIDTH;
+    const leftY = isoY - elevationOffset;
+    
+    // Center of the diamond
     const cx = isoX;
     const cy = isoY - elevationOffset;
+    
+    // Midpoints of each edge (for road connections)
+    // Grid directions map to isometric edges:
+    // - North (y-1) connects via NE edge (between top and right vertices)
+    // - South (y+1) connects via SW edge (between bottom and left vertices)
+    // - East (x+1) connects via SE edge (between right and bottom vertices)
+    // - West (x-1) connects via NW edge (between left and top vertices)
+    const northMidX = (topX + rightX) / 2;   // NE edge midpoint
+    const northMidY = (topY + rightY) / 2;
+    const southMidX = (bottomX + leftX) / 2; // SW edge midpoint
+    const southMidY = (bottomY + leftY) / 2;
+    const eastMidX = (rightX + bottomX) / 2; // SE edge midpoint  
+    const eastMidY = (rightY + bottomY) / 2;
+    const westMidX = (leftX + topX) / 2;     // NW edge midpoint
+    const westMidY = (leftY + topY) / 2;
+    
+    // Calculate connection count for intersection type
+    const connectionCount = [north, south, east, west].filter(Boolean).length;
 
-    // Draw center line markings
-    if (north || south || east || west) {
-      // Draw a small dot in center
-      this.roadGraphics.circle(cx, cy - HALF_TILE_HEIGHT / 2, 2);
-      this.roadGraphics.fill(markingColor);
+    // Draw road lane markings based on connection type
+    if (connectionCount === 0) {
+      // Isolated road - draw a circle in center
+      this.roadGraphics.circle(cx, cy, 4);
+      this.roadGraphics.fill(lineColor);
+    } else if (connectionCount === 2 && ((north && south) || (east && west))) {
+      // Straight road - draw continuous line
+      if (north && south) {
+        // Road runs NW-SE (north to south in grid terms)
+        this.drawRoadStripe(northMidX, northMidY, southMidX, southMidY, lineColor);
+      } else {
+        // Road runs NE-SW (east to west in grid terms)
+        this.drawRoadStripe(eastMidX, eastMidY, westMidX, westMidY, lineColor);
+      }
+    } else {
+      // Dead end, corner, T, or 4-way intersection
+      // Draw center dot
+      this.roadGraphics.circle(cx, cy, 3);
+      this.roadGraphics.fill(lineColor);
+      
+      // Draw stripe from center to each connected edge midpoint
+      if (north) {
+        this.drawRoadStripe(cx, cy, northMidX, northMidY, lineColor);
+      }
+      if (south) {
+        this.drawRoadStripe(cx, cy, southMidX, southMidY, lineColor);
+      }
+      if (east) {
+        this.drawRoadStripe(cx, cy, eastMidX, eastMidY, lineColor);
+      }
+      if (west) {
+        this.drawRoadStripe(cx, cy, westMidX, westMidY, lineColor);
+      }
     }
+  }
 
-    // Draw connection lines
-    if (north) {
-      // Line to north
-      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
-      this.roadGraphics.lineTo(cx - HALF_TILE_WIDTH / 2, cy - HALF_TILE_HEIGHT);
-      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
-    }
-    if (south) {
-      // Line to south
-      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
-      this.roadGraphics.lineTo(cx + HALF_TILE_WIDTH / 2, cy);
-      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
-    }
-    if (east) {
-      // Line to east
-      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
-      this.roadGraphics.lineTo(cx + HALF_TILE_WIDTH / 2, cy - HALF_TILE_HEIGHT);
-      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
-    }
-    if (west) {
-      // Line to west
-      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
-      this.roadGraphics.lineTo(cx - HALF_TILE_WIDTH / 2, cy);
-      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
-    }
+  /**
+   * Draw a road stripe line
+   */
+  private drawRoadStripe(x1: number, y1: number, x2: number, y2: number, color: number): void {
+    if (!this.roadGraphics) return;
+    this.roadGraphics.moveTo(x1, y1);
+    this.roadGraphics.lineTo(x2, y2);
+    this.roadGraphics.stroke({ color, width: 2, alpha: 0.8 });
   }
 
   /**
@@ -702,6 +743,45 @@ export class Renderer {
     this.worldContainer.x = viewport.width / 2 - pos.x * zoom;
     this.worldContainer.y = viewport.height / 2 - pos.y * zoom;
     this.worldContainer.scale.set(zoom);
+  }
+
+  /**
+   * Highlight a tile at the given grid position
+   */
+  highlightTile(gridX: number, gridY: number, elevation: number = 0): void {
+    const overlayLayer = this.getLayer('overlay');
+    
+    // Create highlight graphics if needed
+    if (!this.hoverHighlight) {
+      this.hoverHighlight = new Graphics();
+      overlayLayer.addChild(this.hoverHighlight);
+    }
+    
+    this.hoverHighlight.clear();
+    
+    // Calculate isometric position
+    const isoX = (gridX - gridY) * HALF_TILE_WIDTH;
+    const isoY = (gridX + gridY) * HALF_TILE_HEIGHT;
+    const elevationOffset = (elevation - 250) / 50 * TILE_DEPTH;
+    
+    // Draw highlight diamond
+    this.hoverHighlight.poly([
+      isoX, isoY - HALF_TILE_HEIGHT - elevationOffset,
+      isoX + HALF_TILE_WIDTH, isoY - elevationOffset,
+      isoX, isoY + HALF_TILE_HEIGHT - elevationOffset,
+      isoX - HALF_TILE_WIDTH, isoY - elevationOffset,
+    ]);
+    this.hoverHighlight.fill({ color: 0xffffff, alpha: 0.3 });
+    this.hoverHighlight.stroke({ color: 0xffffff, width: 2 });
+  }
+
+  /**
+   * Clear tile highlight
+   */
+  clearHighlight(): void {
+    if (this.hoverHighlight) {
+      this.hoverHighlight.clear();
+    }
   }
 
   /**

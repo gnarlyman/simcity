@@ -335,7 +335,12 @@ class Game {
         const zoneStr = zone?.zoneType ? ` | ${zone.zoneType.category[0].toUpperCase()}${zone.developed ? '*' : ''}` : '';
         const roadStr = road ? ' | Road' : '';
         hoverInfo = `(${hoveredTile.x}, ${hoveredTile.y})${roadStr}${zoneStr}`;
+        
+        // Show hover highlight
+        this.renderer.highlightTile(hoveredTile.x, hoveredTile.y, terrain.elevation);
       }
+    } else {
+      this.renderer.clearHighlight();
     }
     
     this.renderer.updateDebugText({
