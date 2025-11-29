@@ -8,7 +8,7 @@
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
 import type { RenderLayer, Bounds, GridPosition, TerrainCell, ZoneCell, RoadConnections, PowerCell, PowerConnections, PowerPlantType } from '../data/types';
 import { RENDER_LAYER_ORDER } from '../data/types';
-import { TERRAIN_COLORS, UI_COLORS, ZONE_COLORS, POWER_COLORS, POWER_PLANT_CONFIGS } from '../data/constants';
+import { TERRAIN_COLORS, UI_COLORS, ZONE_COLORS, POWER_COLORS, POWER_PLANT_CONFIGS, INFRASTRUCTURE_COLORS } from '../data/constants';
 import { TILE_WIDTH, TILE_HEIGHT, HALF_TILE_WIDTH, HALF_TILE_HEIGHT, TILE_DEPTH } from '../data/constants';
 import { IsometricCamera } from './IsometricCamera';
 import { Grid } from '../data/Grid';
@@ -424,8 +424,22 @@ export class Renderer {
     const elevationOffset = (elevation - 250) / 50 * TILE_DEPTH;
 
     // Get zone color
-    const color = zoneCell.zoneType.color;
-    const alpha = zoneCell.developed ? 0.3 : 0.5;
+    let color = zoneCell.zoneType.color;
+    let alpha = zoneCell.developed ? 0.3 : 0.5;
+
+    // Check for infrastructure issues (undeveloped zones)
+    const hasInfrastructureIssue = !zoneCell.developed && (!zoneCell.roadAccess || !zoneCell.utilities.power);
+    
+    // Tint color for infrastructure issues
+    if (hasInfrastructureIssue && !zoneCell.developed) {
+      if (!zoneCell.roadAccess) {
+        // Red tint for no road access
+        color = this.blendColors(color, INFRASTRUCTURE_COLORS.noRoadAccess, 0.4);
+      } else if (!zoneCell.utilities.power) {
+        // Orange tint for no power
+        color = this.blendColors(color, INFRASTRUCTURE_COLORS.noPower, 0.4);
+      }
+    }
 
     // Draw zone overlay
     this.zoneOverlay.poly([
@@ -437,10 +451,59 @@ export class Renderer {
     this.zoneOverlay.fill({ color, alpha });
     this.zoneOverlay.stroke({ color: this.darkenColor(color, 0.3), width: 1, alpha: 0.8 });
 
+    // Draw infrastructure issue indicator
+    if (hasInfrastructureIssue && !zoneCell.developed) {
+      this.renderInfrastructureIndicator(isoX, isoY - elevationOffset, !zoneCell.roadAccess, !zoneCell.utilities.power);
+    }
+
     // If developed, draw a simple building indicator
     if (zoneCell.developed) {
       this.renderSimpleBuilding(isoX, isoY - elevationOffset, zoneCell);
     }
+  }
+
+  /**
+   * Render an infrastructure issue indicator (! icon)
+   */
+  private renderInfrastructureIndicator(
+    isoX: number,
+    isoY: number,
+    noRoad: boolean,
+    noPower: boolean
+  ): void {
+    if (!this.zoneOverlay) return;
+
+    const indicatorColor = noRoad ? INFRASTRUCTURE_COLORS.noRoadAccess : INFRASTRUCTURE_COLORS.noPower;
+    const iconY = isoY - 10;
+
+    // Draw warning icon background
+    this.zoneOverlay.circle(isoX, iconY, 6);
+    this.zoneOverlay.fill({ color: indicatorColor, alpha: 0.9 });
+
+    // Draw "!" mark
+    this.zoneOverlay.rect(isoX - 1, iconY - 4, 2, 5);
+    this.zoneOverlay.fill(0xffffff);
+    this.zoneOverlay.circle(isoX, iconY + 3, 1);
+    this.zoneOverlay.fill(0xffffff);
+  }
+
+  /**
+   * Blend two colors together
+   */
+  private blendColors(color1: number, color2: number, factor: number): number {
+    const r1 = (color1 >> 16) & 0xff;
+    const g1 = (color1 >> 8) & 0xff;
+    const b1 = color1 & 0xff;
+    
+    const r2 = (color2 >> 16) & 0xff;
+    const g2 = (color2 >> 8) & 0xff;
+    const b2 = color2 & 0xff;
+    
+    const r = Math.round(r1 * (1 - factor) + r2 * factor);
+    const g = Math.round(g1 * (1 - factor) + g2 * factor);
+    const b = Math.round(b1 * (1 - factor) + b2 * factor);
+    
+    return (r << 16) | (g << 8) | b;
   }
 
   /**

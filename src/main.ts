@@ -12,6 +12,7 @@ import { ZoneSystem, createZoneSystem } from './systems/ZoneSystem';
 import { RoadSystem, createRoadSystem } from './systems/RoadSystem';
 import { RCIDemandSystem, createRCIDemandSystem } from './systems/RCIDemandSystem';
 import { PowerSystem, createPowerSystem } from './systems/PowerSystem';
+import { TemplateSystem, createTemplateSystem } from './systems/TemplateSystem';
 import { InputManager } from './input/InputManager';
 import { Toolbar, createToolbar, Tool } from './ui/Toolbar';
 import { EventBus, EventTypes } from './core/EventBus';
@@ -30,6 +31,7 @@ class Game {
   private roadSystem: RoadSystem;
   private rciDemandSystem: RCIDemandSystem;
   private powerSystem: PowerSystem;
+  private templateSystem: TemplateSystem;
   private inputManager: InputManager | null = null;
   private toolbar: Toolbar | null = null;
   private canvas: HTMLCanvasElement;
@@ -52,6 +54,10 @@ class Game {
   // Two-click placement mode state
   private placementStart: GridPosition | null = null;
   private isInPlacementMode = false;
+  
+  // Template capture state
+  private isCapturingTemplate = false;
+  private templateCaptureStart: GridPosition | null = null;
 
   constructor() {
     // Get canvas element
@@ -70,6 +76,7 @@ class Game {
     this.roadSystem = createRoadSystem();
     this.rciDemandSystem = createRCIDemandSystem();
     this.powerSystem = createPowerSystem();
+    this.templateSystem = createTemplateSystem();
     
     // Register systems with engine (order matters for initialization)
     const world = this.engine.getWorld();
@@ -78,6 +85,7 @@ class Game {
     world.addSystem(this.powerSystem);
     world.addSystem(this.zoneSystem);
     world.addSystem(this.rciDemandSystem);
+    world.addSystem(this.templateSystem);
   }
 
   /**
@@ -151,6 +159,9 @@ class Game {
       console.log('  - 1-9: Select zone tools');
       console.log('  - Q: Query tool');
       console.log('  - B: Bulldoze tool');
+      console.log('  - T: Template capture tool');
+      console.log('  - Ctrl+1-9: Save selection as template');
+      console.log('  - Alt+1-9: Load and place template');
       
     } catch (error) {
       console.error('Failed to initialize game:', error);
@@ -347,12 +358,20 @@ class Game {
         console.log(`Simulation ${this.engine.isPaused() ? 'paused' : 'running'}`);
       }
       
-      // Escape - Cancel placement mode
-      if (key === 'escape' && this.isInPlacementMode) {
-        this.cancelPlacement();
-        console.log('Placement cancelled');
+      // Escape - Cancel all placement modes and deselect tool
+      if (key === 'escape') {
+        this.handleEscapeKey();
+      }
+      
+      // T - Template capture tool
+      if (key === 't') {
+        this.toolbar?.selectTool('template');
+        console.log('Template capture tool selected');
       }
     });
+    
+    // Listen for raw keyboard events for Ctrl/Alt + number shortcuts
+    this.setupTemplateKeyboardShortcuts();
     
     // Listen for UI toggle zones event
     eventBus.on('ui:toggle_zones', () => {
@@ -435,6 +454,44 @@ class Game {
   private handleToolAction(tool: Tool, position: GridPosition): void {
     // Query tool: just display info, no placement
     if (tool.category === 'query') {
+      return;
+    }
+    
+    // Template tool: handle capture or placement
+    if (tool.id === 'template') {
+      // Check if we have an active template to place
+      if (this.templateSystem.getActiveTemplate()) {
+        // Place the active template at this position
+        this.templateSystem.placeTemplate(position);
+        // Update all overlays
+        this.updateZoneOverlay();
+        this.updateRoadOverlay();
+        this.updatePowerOverlay();
+        return;
+      }
+      
+      // Otherwise, handle template capture
+      if (!this.isCapturingTemplate) {
+        // First click: start capture
+        this.isCapturingTemplate = true;
+        this.templateCaptureStart = position;
+        this.templateSystem.startCapture(position);
+        
+        // Show start tile highlight
+        const terrain = this.terrainSystem.getTerrainInfo(position.x, position.y);
+        if (terrain) {
+          this.renderer.highlightStartTile(position.x, position.y, terrain.elevation);
+        }
+        
+        console.log(`Template capture started at (${position.x}, ${position.y})`);
+        console.log('Drag to select area, then press Ctrl+1-9 to save template');
+      } else {
+        // Second click: finish capture area selection (but don't save yet)
+        this.templateSystem.updateCapture(position);
+        
+        console.log('Template area selected. Press Ctrl+1-9 to save as template.');
+        console.log('Press Escape to cancel, or click elsewhere to adjust.');
+      }
       return;
     }
     
@@ -523,14 +580,141 @@ class Game {
   }
 
   /**
+   * Handle Escape key - cancel all states and deselect tools
+   */
+  private handleEscapeKey(): void {
+    // Clear template system states
+    this.templateSystem.clearAllState();
+    
+    // Clear local placement states
+    this.cancelPlacement();
+    
+    // Clear all highlights
+    this.renderer.clearHighlight();
+    this.renderer.clearStartHighlight();
+    
+    // Deselect current tool (switch to query)
+    this.toolbar?.selectTool('query');
+    
+    console.log('Escape pressed - all states cleared, tool deselected');
+  }
+
+  /**
    * Cancel current placement mode
    */
   private cancelPlacement(): void {
     this.placementStart = null;
     this.isInPlacementMode = false;
+    this.isCapturingTemplate = false;
+    this.templateCaptureStart = null;
     this.renderer.clearStartHighlight();
   }
+  
+  /**
+   * Set up keyboard shortcuts for template save/load
+   * Ctrl+1-9: Save template to slot
+   * Alt+1-9: Load template from slot
+   */
+  private setupTemplateKeyboardShortcuts(): void {
+    window.addEventListener('keydown', (e) => {
+      // Don't handle if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      
+      // Check for number keys 1-9
+      const num = parseInt(e.key);
+      if (num >= 1 && num <= 9) {
+        if (e.ctrlKey && !e.altKey && !e.shiftKey) {
+          // Ctrl+1-9: Save template
+          e.preventDefault();
+          
+          if (this.isCapturingTemplate && this.templateCaptureStart) {
+            // Get current hovered tile as end point
+            const hoveredTile = this.inputManager?.getHoveredTile();
+            if (hoveredTile) {
+              this.templateSystem.updateCapture(hoveredTile);
+            }
+            
+            // Save the template
+            const success = this.templateSystem.saveTemplate(num);
+            if (success) {
+              console.log(`Template saved to slot ${num}`);
+              // Reset capture state
+              this.isCapturingTemplate = false;
+              this.templateCaptureStart = null;
+              this.renderer.clearStartHighlight();
+            }
+          } else {
+            console.log('No template area selected. Use Template tool (T) and drag to select an area first.');
+          }
+        } else if (e.altKey && !e.ctrlKey && !e.shiftKey) {
+          // Alt+1-9: Load template
+          e.preventDefault();
+          
+          const success = this.templateSystem.loadTemplate(num);
+          if (success) {
+            // Switch to template tool for placement
+            this.toolbar?.selectTool('template');
+            console.log(`Template ${num} loaded. Click to place.`);
+          } else {
+            console.log(`No template in slot ${num}`);
+          }
+        }
+      }
+    });
+  }
 
+  /**
+   * Show preview for template capture area
+   */
+  private showTemplateCapturePreview(start: GridPosition, end: GridPosition): void {
+    // Use rectangle preview for template capture
+    const cells = this.getRectangleCells(start, end);
+    
+    const tilesWithElevation = cells.map(cell => {
+      const terrain = this.terrainSystem.getTerrainInfo(cell.x, cell.y);
+      return {
+        x: cell.x,
+        y: cell.y,
+        elevation: terrain?.elevation ?? 250,
+      };
+    });
+    
+    // Cyan color for template capture
+    this.renderer.highlightMultipleTiles(tilesWithElevation, 0x00ffff, 0.3);
+  }
+  
+  /**
+   * Show preview for template placement
+   */
+  private showTemplatePlacementPreview(origin: GridPosition): void {
+    const template = this.templateSystem.getActiveTemplate();
+    if (!template) return;
+    const elements = template.elements;
+    if (!elements || elements.length === 0) return;
+    
+    // Get all positions that would be affected  
+    const tilesWithElevation: Array<{ x: number; y: number; elevation: number }> = [];
+    for (let i = 0; i < elements.length; i++) {
+      const elem = elements[i];
+      if (!elem) continue;
+      if (!elem.offset) continue;
+      // Now both elem and elem.offset are definitely defined
+      const posX = origin.x + elem.offset.x;
+      const posY = origin.y + elem.offset.y;
+      const terrain = this.terrainSystem.getTerrainInfo(posX, posY);
+      tilesWithElevation.push({
+        x: posX,
+        y: posY,
+        elevation: terrain?.elevation ?? 250,
+      });
+    }
+    
+    // Purple color for template placement preview
+    this.renderer.highlightMultipleTiles(tilesWithElevation, 0xff00ff, 0.4);
+  }
+  
   /**
    * Show preview during two-click placement mode
    */
@@ -742,11 +926,18 @@ class Game {
         const powerStr = powerCell?.hasPowerPlant ? ' | Plant' : 
                          powerCell?.hasPowerLine ? ' | PLine' : 
                          power ? ' | ⚡' : '';
-        hoverInfo = `(${hoveredTile!.x}, ${hoveredTile!.y})${roadStr}${powerStr}${zoneStr}`;
+        hoverInfo = `(${hoveredTile.x}, ${hoveredTile.y})${roadStr}${powerStr}${zoneStr}`;
         
         // Show placement preview or single tile hover highlight
         if (this.isInPlacementMode && this.placementStart && this.terrainGrid) {
           this.showPlacementPreview(this.placementStart, hoveredTile);
+        } else if (this.isCapturingTemplate && this.templateCaptureStart && this.terrainGrid) {
+          // Show template capture preview
+          this.templateSystem.updateCapture(hoveredTile);
+          this.showTemplateCapturePreview(this.templateCaptureStart, hoveredTile);
+        } else if (this.templateSystem.getActiveTemplate()) {
+          // Show template placement preview
+          this.showTemplatePlacementPreview(hoveredTile);
         } else {
           this.renderer.highlightTile(hoveredTile.x, hoveredTile.y, terrain.elevation);
         }

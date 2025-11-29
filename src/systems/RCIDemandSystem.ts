@@ -2,7 +2,9 @@
  * RCI Demand System
  * 
  * Calculates and manages Residential, Commercial, and Industrial demand.
- * Demand drives building development in zoned areas.
+ * Implements the needs system where RCI zones depend on each other.
+ * Enforces infrastructure requirements (road access, power) for development.
+ * Handles building functionality and grace periods for lost infrastructure.
  */
 
 import type { 
@@ -12,7 +14,9 @@ import type {
   ZoneDensity,
   EntityId,
   BuildingComponent,
-  PositionComponent
+  PositionComponent,
+  BuildingStatus,
+  InfrastructureIssues
 } from '../data/types';
 import { BaseSystem, World } from '../core/ECS';
 import { EventBus, EventTypes } from '../core/EventBus';
@@ -24,19 +28,34 @@ import {
   MIN_DEVELOPMENT_DEMAND,
   FAST_DEVELOPMENT_DEMAND,
   BASE_DEVELOPMENT_CHANCE,
-  BASE_ABANDONMENT_CHANCE,
-  ABANDONMENT_DEMAND_THRESHOLD
+  INFRASTRUCTURE_GRACE_PERIOD,
+  BASE_RESIDENTIAL_DEMAND,
+  BASE_COMMERCIAL_DEMAND,
+  BASE_INDUSTRIAL_DEMAND,
+  COMMERCIAL_PER_POPULATION_RATIO,
+  INDUSTRIAL_PER_POPULATION_RATIO,
+  RESIDENTIAL_WORKERS,
+  COMMERCIAL_JOBS,
+  INDUSTRIAL_JOBS
 } from '../data/constants';
 import { ZoneSystem } from './ZoneSystem';
+import { PowerSystem } from './PowerSystem';
+import { posKey } from '../data/Grid';
 
 /**
- * Development chance modifiers
+ * Building tracking info
  */
-interface DevelopmentModifiers {
-  demand: number;
-  desirability: number;
-  roadAccess: boolean;
-  utilities: boolean;
+interface TrackedBuilding {
+  entityId: EntityId;
+  position: GridPosition;
+  category: ZoneCategory;
+  density: ZoneDensity;
+  population: number;
+  jobs: number;
+  status: BuildingStatus;
+  infrastructureIssues: InfrastructureIssues;
+  infrastructureLostAt: number | null;
+  isContributing: boolean;
 }
 
 /**
@@ -47,7 +66,21 @@ export class RCIDemandSystem extends BaseSystem {
   requiredComponents: string[] = [];
   priority = 20;
 
-  /** Current demand state */
+  /** 
+   * RCI Valves - Cumulative demand values (SimCity-style)
+   * Positive = growth demand, Negative = decline
+   * These accumulate over time based on city balance
+   */
+  private resValve = 0;
+  private comValve = 0;
+  private indValve = 0;
+
+  /** Valve ranges (from Micropolis source) */
+  private readonly RES_VALVE_RANGE = 2000;
+  private readonly COM_VALVE_RANGE = 1500;
+  private readonly IND_VALVE_RANGE = 1500;
+
+  /** Current demand state (derived from valves) */
   private demandState: DemandState = {
     residential: { low: 0, medium: 0, high: 0 },
     commercial: { low: 0, medium: 0, high: 0 },
@@ -61,11 +94,19 @@ export class RCIDemandSystem extends BaseSystem {
     industrial: { agriculture: 0, dirty: 0, manufacturing: 0, highTech: 0 },
   };
 
+  /** Historical population data (for calculating growth rate) */
+  private lastResPop = 0;
+  private lastComPop = 0;
+  private lastIndPop = 0;
+
   /** Event bus */
   private eventBus: EventBus | null = null;
 
   /** Zone system reference */
   private zoneSystem: ZoneSystem | null = null;
+
+  /** Power system reference */
+  private powerSystem: PowerSystem | null = null;
 
   /** Time accumulator for demand updates */
   private updateAccumulator = 0;
@@ -76,12 +117,24 @@ export class RCIDemandSystem extends BaseSystem {
   /** Development check interval (ms) */
   private developmentInterval = 1000;
 
-  /** Population count */
-  private population = 0;
+  /** Infrastructure check interval (ms) */
+  private infrastructureCheckInterval = 500;
 
-  /** Job counts */
-  private commercialJobs = 0;
-  private industrialJobs = 0;
+  /** Infrastructure check accumulator */
+  private infrastructureAccumulator = 0;
+
+  /** All tracked buildings */
+  private buildings: Map<EntityId, TrackedBuilding> = new Map();
+
+  /** Total contributing population */
+  private contributingPopulation = 0;
+
+  /** Total contributing jobs */
+  private contributingCommercialJobs = 0;
+  private contributingIndustrialJobs = 0;
+
+  /** Current game time (for grace period tracking) */
+  private currentTime = 0;
 
   /**
    * Initialize the system
@@ -89,6 +142,7 @@ export class RCIDemandSystem extends BaseSystem {
   init(world: World): void {
     this.eventBus = world.getEventBus();
     this.zoneSystem = world.getSystem<ZoneSystem>('ZoneSystem');
+    this.powerSystem = world.getSystem<PowerSystem>('PowerSystem');
     
     // Set initial demand to encourage development
     this.setInitialDemand();
@@ -104,36 +158,74 @@ export class RCIDemandSystem extends BaseSystem {
 
     // Listen for building development
     this.eventBus.on(EventTypes.BUILDING_DEVELOPED, (event) => {
-      const { population, jobs } = event.data as { population: number; jobs: number };
-      this.population += population;
-      // Jobs are split between commercial and industrial based on building type
+      const { entityId, position, buildingType, population, jobs } = event.data as {
+        entityId: EntityId;
+        position: GridPosition;
+        buildingType: string;
+        population: number;
+        jobs: number;
+      };
+      
+      // Parse building type (format: category_density)
+      const [category, density] = buildingType.split('_') as [ZoneCategory, ZoneDensity];
+      
+      // Create tracked building
+      const building: TrackedBuilding = {
+        entityId,
+        position,
+        category,
+        density,
+        population,
+        jobs,
+        status: 'functional',
+        infrastructureIssues: { noRoadAccess: false, noPower: false },
+        infrastructureLostAt: null,
+        isContributing: true,
+      };
+      
+      this.buildings.set(entityId, building);
+      this.updateContributingStats();
+      
+      // Immediately recalculate and emit demand after building development
+      this.calculateDemand();
     });
 
     // Listen for building abandonment/demolition
     this.eventBus.on(EventTypes.BUILDING_ABANDONED, (event) => {
-      const { population, jobs } = event.data as { population: number; jobs: number };
-      this.population = Math.max(0, this.population - population);
+      const { entityId } = event.data as { entityId: EntityId };
+      this.buildings.delete(entityId);
+      this.updateContributingStats();
     });
   }
 
   /**
    * Set initial demand values
+   * Initialize valves to create starting demand
    */
   private setInitialDemand(): void {
-    // Start with moderate residential demand to kick-start development
-    this.targetDemand.residential.low = 2000;
-    this.targetDemand.residential.medium = 500;
+    // Initialize valves to create initial demand
+    // In SimCity, empty cities start with positive R and I demand
+    this.resValve = 500;  // Initial residential demand
+    this.comValve = 100;  // Low commercial initially (need population first)
+    this.indValve = 400;  // Good industrial to create jobs
+
+    // Calculate initial demand from valves
+    const resDemand = this.valveToDemand(this.resValve, this.RES_VALVE_RANGE);
+    const comDemand = this.valveToDemand(this.comValve, this.COM_VALVE_RANGE);
+    const indDemand = this.valveToDemand(this.indValve, this.IND_VALVE_RANGE);
+
+    // Set target demand
+    this.targetDemand.residential.low = this.clampDemand(resDemand * 0.6);
+    this.targetDemand.residential.medium = 0;
     this.targetDemand.residential.high = 0;
 
-    // Low initial commercial demand
-    this.targetDemand.commercial.low = 500;
+    this.targetDemand.commercial.low = this.clampDemand(comDemand * 0.6);
     this.targetDemand.commercial.medium = 0;
     this.targetDemand.commercial.high = 0;
 
-    // Moderate industrial demand
-    this.targetDemand.industrial.dirty = 1000;
-    this.targetDemand.industrial.manufacturing = 500;
-    this.targetDemand.industrial.agriculture = 200;
+    this.targetDemand.industrial.dirty = this.clampDemand(indDemand * 0.4);
+    this.targetDemand.industrial.manufacturing = this.clampDemand(indDemand * 0.3);
+    this.targetDemand.industrial.agriculture = this.clampDemand(indDemand * 0.2);
     this.targetDemand.industrial.highTech = 0;
 
     // Copy to current state
@@ -144,6 +236,15 @@ export class RCIDemandSystem extends BaseSystem {
    * Update the system
    */
   update(world: World, deltaTime: number): void {
+    this.currentTime += deltaTime;
+
+    // Check infrastructure status periodically
+    this.infrastructureAccumulator += deltaTime;
+    if (this.infrastructureAccumulator >= this.infrastructureCheckInterval) {
+      this.infrastructureAccumulator = 0;
+      this.checkBuildingInfrastructure();
+    }
+
     // Update demand calculations periodically
     this.updateAccumulator += deltaTime;
     if (this.updateAccumulator >= DEMAND_UPDATE_INTERVAL) {
@@ -163,54 +264,224 @@ export class RCIDemandSystem extends BaseSystem {
   }
 
   /**
-   * Calculate demand based on city state
+   * Check infrastructure status for all buildings
+   */
+  private checkBuildingInfrastructure(): void {
+    if (!this.zoneSystem || !this.powerSystem) return;
+
+    const poweredPositions = this.powerSystem.getPoweredPositions();
+
+    for (const building of this.buildings.values()) {
+      const zoneCell = this.zoneSystem.getZoneCell(building.position);
+      if (!zoneCell) continue;
+
+      // Check infrastructure issues
+      const hadIssues = building.infrastructureIssues.noRoadAccess || building.infrastructureIssues.noPower;
+      
+      building.infrastructureIssues.noRoadAccess = !zoneCell.roadAccess;
+      building.infrastructureIssues.noPower = !poweredPositions.has(posKey(building.position));
+
+      const hasIssues = building.infrastructureIssues.noRoadAccess || building.infrastructureIssues.noPower;
+
+      // Handle infrastructure state transitions
+      if (hasIssues && !hadIssues) {
+        // Just lost infrastructure - start grace period
+        building.infrastructureLostAt = this.currentTime;
+        building.status = 'non_functional';
+        building.isContributing = false;
+        this.updateContributingStats();
+        
+        console.log(`Building at (${building.position.x}, ${building.position.y}) lost infrastructure`);
+      } else if (!hasIssues && hadIssues) {
+        // Infrastructure restored
+        building.infrastructureLostAt = null;
+        building.status = 'functional';
+        building.isContributing = true;
+        this.updateContributingStats();
+        
+        console.log(`Building at (${building.position.x}, ${building.position.y}) infrastructure restored`);
+      } else if (hasIssues && building.infrastructureLostAt !== null) {
+        // Check if grace period expired
+        const timeSinceLost = this.currentTime - building.infrastructureLostAt;
+        if (timeSinceLost >= INFRASTRUCTURE_GRACE_PERIOD && building.status !== 'abandoned') {
+          building.status = 'abandoned';
+          
+          // Emit abandonment event
+          if (this.eventBus) {
+            this.eventBus.emit({
+              type: EventTypes.BUILDING_ABANDONED,
+              timestamp: Date.now(),
+              data: {
+                entityId: building.entityId,
+                position: building.position,
+                reason: building.infrastructureIssues.noRoadAccess ? 'no_road' : 'no_power',
+              },
+            });
+          }
+          
+          console.log(`Building at (${building.position.x}, ${building.position.y}) abandoned due to infrastructure loss`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Update contributing stats from all functional buildings
+   */
+  private updateContributingStats(): void {
+    let population = 0;
+    let commercialJobs = 0;
+    let industrialJobs = 0;
+
+    for (const building of this.buildings.values()) {
+      if (building.isContributing) {
+        if (building.category === 'residential') {
+          population += building.population;
+        } else if (building.category === 'commercial') {
+          commercialJobs += building.jobs;
+        } else if (building.category === 'industrial') {
+          industrialJobs += building.jobs;
+        }
+      }
+    }
+
+    this.contributingPopulation = population;
+    this.contributingCommercialJobs = commercialJobs;
+    this.contributingIndustrialJobs = industrialJobs;
+  }
+
+  /**
+   * Calculate demand using REAL SimCity/Micropolis formula
+   * 
+   * Based on the open-source Micropolis simulate.cpp setValves() function.
+   * Key concepts:
+   * - Employment drives residential (jobs available vs workers)
+   * - Labor base affects commercial and industrial
+   * - Internal market drives commercial
+   * - Valves accumulate over time (not reset each cycle)
    */
   private calculateDemand(): void {
-    const stats = this.zoneSystem?.getZoneStats();
-    if (!stats) return;
-
-    // Calculate residential demand
-    // People want to move in if there are jobs
-    const totalJobs = this.commercialJobs + this.industrialJobs;
-    const unemployed = Math.max(0, this.population - totalJobs);
-    const jobSurplus = Math.max(0, totalJobs - this.population);
-
-    // Residential demand increases with job surplus
-    this.targetDemand.residential.low = this.clampDemand(
-      1000 + jobSurplus * 10 - stats.residential.developed * 5
-    );
+    // Get current city stats
+    const resPop = this.contributingPopulation;
+    const comPop = this.contributingCommercialJobs;
+    const indPop = this.contributingIndustrialJobs;
+    
+    // Micropolis parameters
+    const birthRate = 0.02;
+    const laborBaseMax = 1.3;
+    const internalMarketDenom = 3.7;
+    const projectedIndPopMin = 5.0;
+    const resRatioDefault = 1.3;
+    const resRatioMax = 2.0;
+    const comRatioMax = 2.0;
+    const indRatioMax = 2.0;
+    const taxTableScale = 600;
+    
+    // Normalize residential population (Micropolis divides by 8)
+    const normalizedResPop = resPop / 8;
+    
+    // Calculate employment ratio
+    let employment = 1.0;
+    if (normalizedResPop > 0) {
+      employment = (comPop + indPop) / normalizedResPop;
+    }
+    
+    // Migration based on employment
+    const migration = normalizedResPop * (employment - 1);
+    const births = normalizedResPop * birthRate;
+    const projectedResPop = normalizedResPop + migration + births;
+    
+    // Calculate labor base (workers per job)
+    let laborBase = 1.0;
+    const totalJobs = comPop + indPop;
+    if (totalJobs > 0) {
+      laborBase = this.lastResPop / totalJobs;
+    }
+    laborBase = Math.max(0, Math.min(laborBaseMax, laborBase));
+    
+    // Internal market drives commercial demand
+    const internalMarket = (normalizedResPop + comPop + indPop) / internalMarketDenom;
+    
+    // Projected populations
+    const projectedComPop = internalMarket * laborBase;
+    let projectedIndPop = indPop * laborBase * 1.0; // External market factor = 1.0
+    projectedIndPop = Math.max(projectedIndPop, projectedIndPopMin);
+    
+    // Calculate ratios (projected vs actual)
+    let resRatio: number;
+    if (normalizedResPop > 0) {
+      resRatio = projectedResPop / normalizedResPop;
+    } else {
+      resRatio = resRatioDefault;
+    }
+    
+    let comRatio: number;
+    if (comPop > 0) {
+      comRatio = projectedComPop / comPop;
+    } else {
+      comRatio = projectedComPop;
+    }
+    
+    let indRatio: number;
+    if (indPop > 0) {
+      indRatio = projectedIndPop / indPop;
+    } else {
+      indRatio = projectedIndPop;
+    }
+    
+    // Cap ratios
+    resRatio = Math.min(resRatio, resRatioMax);
+    comRatio = Math.min(comRatio, comRatioMax);
+    indRatio = Math.min(indRatio, indRatioMax);
+    
+    // Tax effect (simplified - assume low tax)
+    const taxEffect = 50; // Middle of tax table
+    
+    // Convert ratios to valve changes
+    const resChange = (resRatio - 1) * taxTableScale + taxEffect;
+    const comChange = (comRatio - 1) * taxTableScale + taxEffect;
+    const indChange = (indRatio - 1) * taxTableScale + taxEffect;
+    
+    // CUMULATIVE valve updates (this is the key SimCity mechanic!)
+    this.resValve = this.clampValve(this.resValve + resChange, this.RES_VALVE_RANGE);
+    this.comValve = this.clampValve(this.comValve + comChange, this.COM_VALVE_RANGE);
+    this.indValve = this.clampValve(this.indValve + indChange, this.IND_VALVE_RANGE);
+    
+    // Save current population for next cycle
+    this.lastResPop = resPop;
+    this.lastComPop = comPop;
+    this.lastIndPop = indPop;
+    
+    // Convert valves to target demand state
+    // Distribute demand across density levels
+    const resDemand = this.valveToDemand(this.resValve, this.RES_VALVE_RANGE);
+    const comDemand = this.valveToDemand(this.comValve, this.COM_VALVE_RANGE);
+    const indDemand = this.valveToDemand(this.indValve, this.IND_VALVE_RANGE);
+    
+    // Residential distribution (more low density at start)
+    this.targetDemand.residential.low = this.clampDemand(resDemand * 0.6);
     this.targetDemand.residential.medium = this.clampDemand(
-      Math.max(0, this.population - 100) * 2 - stats.residential.developed * 3
+      resPop > 50 ? resDemand * 0.3 : 0
     );
     this.targetDemand.residential.high = this.clampDemand(
-      Math.max(0, this.population - 500) * 1 - stats.residential.developed * 2
+      resPop > 200 ? resDemand * 0.1 : 0
     );
-
-    // Commercial demand based on population
-    const commercialNeed = this.population * 0.3;
-    this.targetDemand.commercial.low = this.clampDemand(
-      500 + commercialNeed - stats.commercial.developed * 10
-    );
+    
+    // Commercial distribution
+    this.targetDemand.commercial.low = this.clampDemand(comDemand * 0.6);
     this.targetDemand.commercial.medium = this.clampDemand(
-      Math.max(0, this.population - 200) - stats.commercial.developed * 5
+      resPop > 100 ? comDemand * 0.3 : 0
     );
     this.targetDemand.commercial.high = this.clampDemand(
-      Math.max(0, this.population - 1000) * 0.5 - stats.commercial.developed * 3
+      resPop > 500 ? comDemand * 0.1 : 0
     );
-
-    // Industrial demand based on commercial activity and population
-    const industrialNeed = this.population * 0.4 + this.commercialJobs * 0.2;
-    this.targetDemand.industrial.dirty = this.clampDemand(
-      500 + industrialNeed * 0.4 - stats.industrial.developed * 8
-    );
-    this.targetDemand.industrial.manufacturing = this.clampDemand(
-      industrialNeed * 0.3 - stats.industrial.developed * 5
-    );
-    this.targetDemand.industrial.agriculture = this.clampDemand(
-      200 + this.population * 0.1 - stats.industrial.developed * 3
-    );
+    
+    // Industrial distribution
+    this.targetDemand.industrial.dirty = this.clampDemand(indDemand * 0.4);
+    this.targetDemand.industrial.manufacturing = this.clampDemand(indDemand * 0.3);
+    this.targetDemand.industrial.agriculture = this.clampDemand(indDemand * 0.2);
     this.targetDemand.industrial.highTech = this.clampDemand(
-      Math.max(0, this.population - 500) * 0.2 - stats.industrial.developed * 2
+      resPop > 300 ? indDemand * 0.1 : 0
     );
 
     // Emit demand updated event
@@ -221,6 +492,25 @@ export class RCIDemandSystem extends BaseSystem {
         data: this.demandState,
       });
     }
+  }
+
+  /**
+   * Clamp valve to range
+   */
+  private clampValve(value: number, range: number): number {
+    return Math.max(-range, Math.min(range, value));
+  }
+
+  /**
+   * Convert valve value to demand (0 to DEMAND_MAX)
+   */
+  private valveToDemand(valve: number, range: number): number {
+    // Valve ranges from -range to +range
+    // Convert to 0 to DEMAND_MAX, with 0 at valve=0
+    if (valve <= 0) {
+      return 0;
+    }
+    return (valve / range) * DEMAND_MAX;
   }
 
   /**
@@ -304,29 +594,49 @@ export class RCIDemandSystem extends BaseSystem {
    * Process building development
    */
   private processDevelopment(world: World): void {
-    if (!this.zoneSystem) return;
+    if (!this.zoneSystem || !this.powerSystem) return;
+
+    const poweredPositions = this.powerSystem.getPoweredPositions();
 
     // Get undeveloped zones for each category
     const residentialZones = this.zoneSystem.getUndevelopedZones('residential');
     const commercialZones = this.zoneSystem.getUndevelopedZones('commercial');
     const industrialZones = this.zoneSystem.getUndevelopedZones('industrial');
 
-    // Try to develop zones based on demand
-    this.tryDevelopZones(world, residentialZones, 'residential');
-    this.tryDevelopZones(world, commercialZones, 'commercial');
-    this.tryDevelopZones(world, industrialZones, 'industrial');
+    // Try to develop zones based on demand (with infrastructure requirements)
+    this.tryDevelopZones(world, residentialZones, 'residential', poweredPositions);
+    this.tryDevelopZones(world, commercialZones, 'commercial', poweredPositions);
+    this.tryDevelopZones(world, industrialZones, 'industrial', poweredPositions);
   }
 
   /**
    * Try to develop zones of a specific category
+   * REQUIRES: Road access AND Power
    */
   private tryDevelopZones(
     world: World,
-    zones: Array<{ position: GridPosition; zoneType: { density: ZoneDensity } | null; roadAccess: boolean; utilities: { power: boolean; water: boolean } }>,
-    category: ZoneCategory
+    zones: Array<{ 
+      position: GridPosition; 
+      zoneType: { density: ZoneDensity } | null; 
+      roadAccess: boolean; 
+      utilities: { power: boolean; water: boolean } 
+    }>,
+    category: ZoneCategory,
+    poweredPositions: Set<string>
   ): void {
     for (const zone of zones) {
       if (!zone.zoneType) continue;
+
+      // HARD REQUIREMENT: Must have road access
+      if (!zone.roadAccess) {
+        continue;
+      }
+
+      // HARD REQUIREMENT: Must have power
+      const hasPower = poweredPositions.has(posKey(zone.position));
+      if (!hasPower) {
+        continue;
+      }
 
       const density = zone.zoneType.density;
       const demand = this.getDemandForZone(category, density);
@@ -334,18 +644,14 @@ export class RCIDemandSystem extends BaseSystem {
       // Skip if demand is too low
       if (demand < MIN_DEVELOPMENT_DEMAND) continue;
 
-      // Calculate development chance
+      // Calculate development chance based on demand
       const baseChance = BASE_DEVELOPMENT_CHANCE;
-      const demandBonus = (demand - MIN_DEVELOPMENT_DEMAND) / (FAST_DEVELOPMENT_DEMAND - MIN_DEVELOPMENT_DEMAND);
+      const demandBonus = Math.min(1, (demand - MIN_DEVELOPMENT_DEMAND) / (FAST_DEVELOPMENT_DEMAND - MIN_DEVELOPMENT_DEMAND));
       
-      // Road access is currently always true for simplicity
-      // In a full implementation, this would check actual road connectivity
-      const roadBonus = zone.roadAccess ? 1.0 : 0.1;
-      
-      // Utilities bonus
-      const utilityBonus = (zone.utilities.power ? 0.5 : 0) + (zone.utilities.water ? 0.5 : 0);
+      // Water provides a small bonus but is not required
+      const waterBonus = zone.utilities.water ? 0.2 : 0;
 
-      const finalChance = baseChance * (1 + demandBonus) * roadBonus * (0.5 + utilityBonus);
+      const finalChance = baseChance * (0.5 + demandBonus * 0.5 + waterBonus);
 
       // Roll for development
       if (Math.random() < finalChance) {
@@ -396,7 +702,7 @@ export class RCIDemandSystem extends BaseSystem {
     // Calculate population/jobs based on density
     const { population, jobs } = this.calculateBuildingCapacity(category, density);
 
-    // Add building component
+    // Add building component with infrastructure tracking
     world.addComponent(entityId, {
       type: 'building',
       buildingType: `${category}_${density}`,
@@ -405,21 +711,16 @@ export class RCIDemandSystem extends BaseSystem {
       condition: 'normal',
       population: category === 'residential' ? population : 0,
       jobs: category !== 'residential' ? jobs : 0,
+      status: 'functional',
+      infrastructureIssues: { noRoadAccess: false, noPower: false },
+      infrastructureLostAt: null,
+      isContributing: true,
     } as BuildingComponent);
 
     // Mark zone as developed
     this.zoneSystem?.setDeveloped(position, entityId);
 
-    // Update totals
-    if (category === 'residential') {
-      this.population += population;
-    } else if (category === 'commercial') {
-      this.commercialJobs += jobs;
-    } else {
-      this.industrialJobs += jobs;
-    }
-
-    // Emit event
+    // Emit event (building tracking is handled in event listener)
     if (this.eventBus) {
       this.eventBus.emit({
         type: EventTypes.BUILDING_DEVELOPED,
@@ -428,8 +729,8 @@ export class RCIDemandSystem extends BaseSystem {
           entityId,
           position,
           buildingType: `${category}_${density}`,
-          population,
-          jobs,
+          population: category === 'residential' ? population : 0,
+          jobs: category !== 'residential' ? jobs : 0,
         },
       });
     }
@@ -444,15 +745,13 @@ export class RCIDemandSystem extends BaseSystem {
     category: ZoneCategory,
     density: ZoneDensity
   ): { population: number; jobs: number } {
-    const densityMultiplier = density === 'low' ? 1 : density === 'medium' ? 4 : 16;
-
     switch (category) {
       case 'residential':
-        return { population: 2 * densityMultiplier, jobs: 0 };
+        return { population: RESIDENTIAL_WORKERS[density], jobs: 0 };
       case 'commercial':
-        return { population: 0, jobs: 3 * densityMultiplier };
+        return { population: 0, jobs: COMMERCIAL_JOBS[density] };
       case 'industrial':
-        return { population: 0, jobs: 5 * densityMultiplier };
+        return { population: 0, jobs: INDUSTRIAL_JOBS[density] };
       default:
         return { population: 0, jobs: 0 };
     }
@@ -467,46 +766,75 @@ export class RCIDemandSystem extends BaseSystem {
 
   /**
    * Get demand value for a category (normalized -1 to 1)
+   * Uses the valve system directly for more responsive feedback
    */
   getNormalizedDemand(category: ZoneCategory): number {
-    let total = 0;
+    let valve = 0;
+    let range = 0;
+    
     switch (category) {
       case 'residential':
-        total = this.demandState.residential.low + 
-                this.demandState.residential.medium + 
-                this.demandState.residential.high;
+        valve = this.resValve;
+        range = this.RES_VALVE_RANGE;
         break;
       case 'commercial':
-        total = this.demandState.commercial.low + 
-                this.demandState.commercial.medium + 
-                this.demandState.commercial.high;
+        valve = this.comValve;
+        range = this.COM_VALVE_RANGE;
         break;
       case 'industrial':
-        total = this.demandState.industrial.agriculture + 
-                this.demandState.industrial.dirty + 
-                this.demandState.industrial.manufacturing + 
-                this.demandState.industrial.highTech;
+        valve = this.indValve;
+        range = this.IND_VALVE_RANGE;
         break;
     }
-    return Math.max(-1, Math.min(1, total / DEMAND_MAX));
+    
+    // Valve ranges from -range to +range
+    // Normalize to -1 to 1
+    return Math.max(-1, Math.min(1, valve / range));
   }
 
   /**
-   * Get population count
+   * Get raw valve values (for debugging/display)
+   */
+  getValves(): { residential: number; commercial: number; industrial: number } {
+    return {
+      residential: this.resValve,
+      commercial: this.comValve,
+      industrial: this.indValve,
+    };
+  }
+
+  /**
+   * Get population count (only from contributing buildings)
    */
   getPopulation(): number {
-    return this.population;
+    return this.contributingPopulation;
   }
 
   /**
-   * Get job counts
+   * Get job counts (only from contributing buildings)
    */
   getJobs(): { commercial: number; industrial: number; total: number } {
     return {
-      commercial: this.commercialJobs,
-      industrial: this.industrialJobs,
-      total: this.commercialJobs + this.industrialJobs,
+      commercial: this.contributingCommercialJobs,
+      industrial: this.contributingIndustrialJobs,
+      total: this.contributingCommercialJobs + this.contributingIndustrialJobs,
     };
+  }
+
+  /**
+   * Get all tracked buildings
+   */
+  getBuildings(): Map<EntityId, TrackedBuilding> {
+    return this.buildings;
+  }
+
+  /**
+   * Get buildings with infrastructure issues
+   */
+  getBuildingsWithIssues(): TrackedBuilding[] {
+    return Array.from(this.buildings.values()).filter(
+      b => b.infrastructureIssues.noRoadAccess || b.infrastructureIssues.noPower
+    );
   }
 
   /**

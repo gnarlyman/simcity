@@ -50,6 +50,14 @@ export interface BuildingComponent extends Component {
   condition: BuildingCondition;
   population: number;
   jobs: number;
+  /** Current infrastructure status */
+  status: BuildingStatus;
+  /** Current infrastructure issues */
+  infrastructureIssues: InfrastructureIssues;
+  /** Timestamp when infrastructure was lost (for grace period) */
+  infrastructureLostAt: number | null;
+  /** Whether this building is contributing to city stats */
+  isContributing: boolean;
 }
 
 /** Terrain component for terrain cells */
@@ -214,6 +222,15 @@ export interface Lot {
 
 /** Building condition states */
 export type BuildingCondition = 'under_construction' | 'normal' | 'abandoned';
+
+/** Building infrastructure status */
+export type BuildingStatus = 'functional' | 'non_functional' | 'abandoned';
+
+/** Infrastructure issues for a building */
+export interface InfrastructureIssues {
+  noRoadAccess: boolean;
+  noPower: boolean;
+}
 
 /** Building footprint */
 export interface BuildingFootprint {

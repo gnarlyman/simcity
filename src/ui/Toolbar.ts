@@ -44,6 +44,9 @@ export const TOOLS: Tool[] = [
   // Bulldoze
   { id: 'bulldoze', name: 'Bulldoze', icon: '🚧', category: 'bulldoze', hotkey: 'b' },
   
+  // Template capture
+  { id: 'template', name: 'Template Capture', icon: '📋', category: 'other', hotkey: 't' },
+  
   // Roads
   { id: 'road', name: 'Road', icon: '🛣️', category: 'road', hotkey: 'r', cost: 10 },
   
@@ -75,7 +78,7 @@ export const TOOLS: Tool[] = [
  * Tool groups for organizing the toolbar
  */
 export const TOOL_GROUPS: ToolGroup[] = [
-  { id: 'utilities', label: 'Utilities', icon: '🔧', tools: ['query', 'bulldoze'] },
+  { id: 'utilities', label: 'Utilities', icon: '🔧', tools: ['query', 'bulldoze', 'template'] },
   { id: 'infrastructure', label: 'Infrastructure', icon: '🛤️', tools: ['road', 'power:line'] },
   { id: 'power-plants', label: 'Power', icon: '⚡', tools: ['power:coal', 'power:gas', 'power:nuclear', 'power:wind', 'power:solar'], isDropdown: true },
   { id: 'residential', label: 'Residential', icon: '🏠', tools: ['zone:r-low', 'zone:r-medium', 'zone:r-high'] },
@@ -903,16 +906,24 @@ export class Toolbar {
    */
   updateDemandBars(demandState: DemandState): void {
     // Calculate total demand for each category (normalized to -1 to 1)
-    const maxDemand = 5000;
+    // Use smaller maxDemand to make bars more responsive to changes
+    const maxDemand = 2000;
     
-    const rDemand = (demandState.residential.low + demandState.residential.medium + demandState.residential.high) / maxDemand;
-    const cDemand = (demandState.commercial.low + demandState.commercial.medium + demandState.commercial.high) / maxDemand;
-    const iDemand = (demandState.industrial.agriculture + demandState.industrial.dirty + 
-                     demandState.industrial.manufacturing + demandState.industrial.highTech) / maxDemand;
+    const rTotal = demandState.residential.low + demandState.residential.medium + demandState.residential.high;
+    const cTotal = demandState.commercial.low + demandState.commercial.medium + demandState.commercial.high;
+    const iTotal = demandState.industrial.agriculture + demandState.industrial.dirty + 
+                   demandState.industrial.manufacturing + demandState.industrial.highTech;
+    
+    const rDemand = rTotal / maxDemand;
+    const cDemand = cTotal / maxDemand;
+    const iDemand = iTotal / maxDemand;
 
     this.updateDemandBar(this.demandBars.residential, rDemand);
     this.updateDemandBar(this.demandBars.commercial, cDemand);
     this.updateDemandBar(this.demandBars.industrial, iDemand);
+    
+    // Log demand values for debugging
+    // console.log(`Demand - R: ${Math.round(rTotal)}, C: ${Math.round(cTotal)}, I: ${Math.round(iTotal)}`);
   }
 
   /**

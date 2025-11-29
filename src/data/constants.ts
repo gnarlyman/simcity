@@ -212,8 +212,8 @@ export const ZONE_TYPES: Record<string, ZoneType> = {
   },
 };
 
-/** Maximum distance from road for zone development */
-export const MAX_ROAD_DISTANCE = 4;
+/** Maximum distance from road for zone development (zones within this distance have road access) */
+export const MAX_ROAD_DISTANCE = 2;
 
 /** Zone cost per tile by density */
 export const ZONE_COSTS: Record<ZoneDensity, number> = {
@@ -233,10 +233,10 @@ export const DEMAND_MIN = -5000;
 export const DEMAND_MAX = 5000;
 
 /** Demand update interval in game time (ms) */
-export const DEMAND_UPDATE_INTERVAL = 10000;
+export const DEMAND_UPDATE_INTERVAL = 1000; // Update every second for responsive feedback
 
-/** Demand transition smoothing rate */
-export const DEMAND_TRANSITION_RATE = 0.1;
+/** Demand transition smoothing rate (higher = faster response) */
+export const DEMAND_TRANSITION_RATE = 0.5;
 
 // ============================================================================
 // Color Palette
@@ -328,6 +328,68 @@ export const BASE_ABANDONMENT_CHANCE = 0.05;
 
 /** Abandonment demand threshold */
 export const ABANDONMENT_DEMAND_THRESHOLD = -500;
+
+// ============================================================================
+// Infrastructure Requirements
+// ============================================================================
+
+/** Grace period (in ms) before building becomes abandoned when lacking infrastructure */
+export const INFRASTRUCTURE_GRACE_PERIOD = 30000; // 30 seconds
+
+/** Building status types */
+export type BuildingStatus = 'functional' | 'non_functional' | 'abandoned';
+
+// ============================================================================
+// Needs System (RCI Interdependencies)
+// ============================================================================
+
+/** Ratio of commercial jobs per population (how many shoppers a commercial building serves) */
+export const COMMERCIAL_PER_POPULATION_RATIO = 0.3;
+
+/** Ratio of industrial jobs per population (workers available for industry) */
+export const INDUSTRIAL_PER_POPULATION_RATIO = 0.4;
+
+/** Base residential demand when city starts (to bootstrap development) */
+export const BASE_RESIDENTIAL_DEMAND = 1000;
+
+/** Base industrial demand when city starts */
+export const BASE_INDUSTRIAL_DEMAND = 500;
+
+/** Base commercial demand when city starts */
+export const BASE_COMMERCIAL_DEMAND = 200;
+
+/** Jobs provided per residential building by density */
+export const RESIDENTIAL_WORKERS: Record<ZoneDensity, number> = {
+  low: 2,
+  medium: 8,
+  high: 32,
+};
+
+/** Jobs provided per commercial building by density */
+export const COMMERCIAL_JOBS: Record<ZoneDensity, number> = {
+  low: 3,
+  medium: 12,
+  high: 48,
+};
+
+/** Jobs provided per industrial building by density */
+export const INDUSTRIAL_JOBS: Record<ZoneDensity, number> = {
+  low: 5,
+  medium: 20,
+  high: 80,
+};
+
+// ============================================================================
+// Visual Feedback Colors
+// ============================================================================
+
+/** Infrastructure issue overlay colors */
+export const INFRASTRUCTURE_COLORS = {
+  noRoadAccess: 0xff4444,    // Red - no road connection
+  noPower: 0xffaa00,         // Orange/amber - no power
+  nonFunctional: 0x888888,   // Gray - building not working
+  abandoned: 0x442222,       // Dark red - abandoned
+};
 
 // ============================================================================
 // Debug Configuration
