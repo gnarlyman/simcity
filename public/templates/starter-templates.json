@@ -1,0 +1,67 @@
+{
+  "1": {
+    "name": "Basic City Block",
+    "elements": [
+      {"offset": {"x": 0, "y": 0}, "type": "powerplant", "plantType": "coal"},
+      {"offset": {"x": 1, "y": 0}, "type": "powerline"},
+      {"offset": {"x": 2, "y": 0}, "type": "powerline"},
+      {"offset": {"x": 3, "y": 0}, "type": "road"},
+      {"offset": {"x": 4, "y": 0}, "type": "road"},
+      {"offset": {"x": 5, "y": 0}, "type": "road"},
+      {"offset": {"x": 6, "y": 0}, "type": "road"},
+      {"offset": {"x": 7, "y": 0}, "type": "road"},
+      {"offset": {"x": 3, "y": 1}, "type": "zone", "zoneData": {"category": "residential", "density": "low"}},
+      {"offset": {"x": 4, "y": 1}, "type": "zone", "zoneData": {"category": "residential", "density": "low"}},
+      {"offset": {"x": 5, "y": 1}, "type": "zone", "zoneData": {"category": "commercial", "density": "low"}},
+      {"offset": {"x": 6, "y": 1}, "type": "zone", "zoneData": {"category": "commercial", "density": "low"}},
+      {"offset": {"x": 7, "y": 1}, "type": "zone", "zoneData": {"category": "industrial", "density": "low"}},
+      {"offset": {"x": 3, "y": 2}, "type": "zone", "zoneData": {"category": "residential", "density": "low"}},
+      {"offset": {"x": 4, "y": 2}, "type": "zone", "zoneData": {"category": "residential", "density": "low"}},
+      {"offset": {"x": 5, "y": 2}, "type": "zone", "zoneData": {"category": "commercial", "density": "low"}},
+      {"offset": {"x": 6, "y": 2}, "type": "zone", "zoneData": {"category": "commercial", "density": "low"}},
+      {"offset": {"x": 7, "y": 2}, "type": "zone", "zoneData": {"category": "industrial", "density": "low"}},
+      {"offset": {"x": 2, "y": 1}, "type": "powerline"},
+      {"offset": {"x": 2, "y": 2}, "type": "powerline"},
+      {"offset": {"x": 2, "y": 3}, "type": "powerline"},
+      {"offset": {"x": 3, "y": 3}, "type": "powerline"},
+      {"offset": {"x": 4, "y": 3}, "type": "powerline"},
+      {"offset": {"x": 5, "y": 3}, "type": "powerline"},
+      {"offset": {"x": 6, "y": 3}, "type": "powerline"},
+      {"offset": {"x": 7, "y": 3}, "type": "powerline"}
+    ],
+    "width": 8,
+    "height": 4,
+    "capturedAt": 1732858000000
+  },
+  "2": {
+    "name": "Road + Zones Row",
+    "elements": [
+      {"offset": {"x": 0, "y": 0}, "type": "road"},
+      {"offset": {"x": 1, "y": 0}, "type": "road"},
+      {"offset": {"x": 2, "y": 0}, "type": "road"},
+      {"offset": {"x": 3, "y": 0}, "type": "road"},
+      {"offset": {"x": 4, "y": 0}, "type": "road"},
+      {"offset": {"x": 0, "y": 1}, "type": "zone", "zoneData": {"category": "residential", "density": "low"}},
+      {"offset": {"x": 1, "y": 1}, "type": "zone", "zoneData": {"category": "residential", "density": "low"}},
+      {"offset": {"x": 2, "y": 1}, "type": "zone", "zoneData": {"category": "commercial", "density": "low"}},
+      {"offset": {"x": 3, "y": 1}, "type": "zone", "zoneData": {"category": "industrial", "density": "low"}},
+      {"offset": {"x": 4, "y": 1}, "type": "zone", "zoneData": {"category": "industrial", "density": "low"}}
+    ],
+    "width": 5,
+    "height": 2,
+    "capturedAt": 1732858000000
+  },
+  "3": {
+    "name": "Power Line",
+    "elements": [
+      {"offset": {"x": 0, "y": 0}, "type": "powerline"},
+      {"offset": {"x": 1, "y": 0}, "type": "powerline"},
+      {"offset": {"x": 2, "y": 0}, "type": "powerline"},
+      {"offset": {"x": 3, "y": 0}, "type": "powerline"},
+      {"offset": {"x": 4, "y": 0}, "type": "powerline"}
+    ],
+    "width": 5,
+    "height": 1,
+    "capturedAt": 1732858000000
+  }
+}

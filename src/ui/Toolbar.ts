@@ -7,8 +7,7 @@
  */
 
 import { EventBus, EventTypes } from '../core/EventBus';
-import type { ZoneCategory, ZoneDensity, DemandState, PowerPlantType } from '../data/types';
-import { ZONE_TYPES, ZONE_COLORS, UI_COLORS, POWER_PLANT_CONFIGS } from '../data/constants';
+import type { DemandState } from '../data/types';
 
 /**
  * Tool definition
@@ -838,7 +837,7 @@ export class Toolbar {
     });
 
     // Listen for building development to update population
-    this.eventBus.on(EventTypes.BUILDING_DEVELOPED, (event) => {
+    this.eventBus.on(EventTypes.BUILDING_DEVELOPED, () => {
       // Population will be updated by the system
     });
   }

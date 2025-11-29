@@ -15,10 +15,11 @@ import { PowerSystem, createPowerSystem } from './systems/PowerSystem';
 import { TemplateSystem, createTemplateSystem } from './systems/TemplateSystem';
 import { InputManager } from './input/InputManager';
 import { Toolbar, createToolbar, Tool } from './ui/Toolbar';
-import { EventBus, EventTypes } from './core/EventBus';
-import type { GridPosition, TerrainCell, SimulationSpeed, ZoneType, PowerPlantType } from './data/types';
+import { StatsPanel, createStatsPanel, CityStats } from './ui/StatsPanel';
+import { EventTypes } from './core/EventBus';
+import type { GridPosition, TerrainCell, SimulationSpeed, PowerPlantType } from './data/types';
 import { Grid } from './data/Grid';
-import { ZONE_TYPES, POWER_PLANT_CONFIGS } from './data/constants';
+import { ZONE_TYPES } from './data/constants';
 
 /**
  * Game class - main application controller
@@ -34,6 +35,7 @@ class Game {
   private templateSystem: TemplateSystem;
   private inputManager: InputManager | null = null;
   private toolbar: Toolbar | null = null;
+  private statsPanel: StatsPanel | null = null;
   private canvas: HTMLCanvasElement;
   
   // Grid references
@@ -107,6 +109,9 @@ class Game {
       
       // Create toolbar UI
       this.toolbar = createToolbar(this.engine.getEventBus());
+      
+      // Create stats panel UI
+      this.statsPanel = createStatsPanel(this.engine.getEventBus());
       
       // Set up event listeners
       this.setupEventListeners();
@@ -690,28 +695,18 @@ class Game {
    */
   private showTemplatePlacementPreview(origin: GridPosition): void {
     const template = this.templateSystem.getActiveTemplate();
-    if (!template) return;
-    const elements = template.elements;
-    if (!elements || elements.length === 0) return;
+    if (!template?.elements?.length) return;
     
-    // Get all positions that would be affected  
-    const tilesWithElevation: Array<{ x: number; y: number; elevation: number }> = [];
-    for (let i = 0; i < elements.length; i++) {
-      const elem = elements[i];
-      if (!elem) continue;
-      if (!elem.offset) continue;
-      // Now both elem and elem.offset are definitely defined
-      const posX = origin.x + elem.offset.x;
-      const posY = origin.y + elem.offset.y;
-      const terrain = this.terrainSystem.getTerrainInfo(posX, posY);
-      tilesWithElevation.push({
-        x: posX,
-        y: posY,
-        elevation: terrain?.elevation ?? 250,
-      });
-    }
+    // Build positions array - use filter/map to avoid noUncheckedIndexedAccess issues
+    const elements = template.elements as Array<{ offset: { x: number; y: number } }>;
+    const tilesWithElevation = elements
+      .filter((el): el is { offset: { x: number; y: number } } => el != null && el.offset != null)
+      .map(el => ({
+        x: origin.x + el.offset.x,
+        y: origin.y + el.offset.y,
+        elevation: this.terrainSystem.getTerrainInfo(origin.x + el.offset.x, origin.y + el.offset.y)?.elevation ?? 250,
+      }));
     
-    // Purple color for template placement preview
     this.renderer.highlightMultipleTiles(tilesWithElevation, 0xff00ff, 0.4);
   }
   
@@ -759,9 +754,9 @@ class Game {
   /**
    * Show preview during drag operation
    */
-  private showDragPreview(tool: Tool, startTile: GridPosition, currentTile: GridPosition): void {
+  private showDragPreview(_tool: Tool, _startTile: GridPosition, currentTile: GridPosition): void {
     // For now, just highlight the current tile
-    // TODO: Add multi-tile preview rendering for rectangles/lines
+    // TODO: Add multi-tile preview rendering for rectangles/lines using _tool and _startTile
     const terrain = this.terrainSystem.getTerrainInfo(currentTile.x, currentTile.y);
     if (terrain) {
       this.renderer.highlightTile(currentTile.x, currentTile.y, terrain.elevation);
@@ -919,8 +914,9 @@ class Game {
       if (terrain) {
         const category = zone?.zoneType?.category;
         const isDeveloped = zone?.developed ?? false;
-        const zoneStr = category 
-          ? ` | ${category[0].toUpperCase()}${isDeveloped ? '*' : ''}` 
+        const categoryInitial = category?.charAt(0)?.toUpperCase() ?? '';
+        const zoneStr = categoryInitial
+          ? ` | ${categoryInitial}${isDeveloped ? '*' : ''}`
           : '';
         const roadStr = road ? ' | Road' : '';
         const powerStr = powerCell?.hasPowerPlant ? ' | Plant' : 
@@ -960,6 +956,63 @@ class Game {
     if (this.toolbar) {
       this.toolbar.updatePopulation(this.rciDemandSystem.getPopulation());
     }
+    
+    // Update stats panel
+    this.updateStatsPanel();
+  }
+
+  /**
+   * Update the stats panel with current city data
+   */
+  private updateStatsPanel(): void {
+    if (!this.statsPanel) return;
+    
+    // Get zone stats
+    const zoneStats = this.zoneSystem.getZoneStats();
+    
+    // Get power stats
+    const powerStats = this.powerSystem.getPowerStats();
+    
+    // Get road stats
+    const roadStats = this.roadSystem.getRoadStats();
+    
+    // Calculate total zones per category
+    const rTotal = zoneStats.residential.low + zoneStats.residential.medium + zoneStats.residential.high;
+    const cTotal = zoneStats.commercial.low + zoneStats.commercial.medium + zoneStats.commercial.high;
+    const iTotal = zoneStats.industrial.low + zoneStats.industrial.medium + zoneStats.industrial.high;
+    
+    // Build stats object
+    const stats: Partial<CityStats> = {
+      population: this.rciDemandSystem.getPopulation(),
+      residential: {
+        low: 0,  // TODO: Track population by wealth when implemented
+        medium: 0,
+        high: 0,
+      },
+      zones: {
+        residential: { 
+          total: rTotal, 
+          developed: zoneStats.residential.developed 
+        },
+        commercial: { 
+          total: cTotal, 
+          developed: zoneStats.commercial.developed 
+        },
+        industrial: { 
+          total: iTotal, 
+          developed: zoneStats.industrial.developed 
+        },
+      },
+      power: {
+        capacity: powerStats.totalCapacity,
+        usage: powerStats.totalConsumption,
+        plants: powerStats.powerPlantCount,
+      },
+      roads: roadStats.totalTiles,
+      powerLines: powerStats.powerLineTiles,
+    };
+    
+    this.statsPanel.updateStats(stats);
   }
 
   /**
@@ -980,6 +1033,9 @@ class Game {
     }
     if (this.toolbar) {
       this.toolbar.destroy();
+    }
+    if (this.statsPanel) {
+      this.statsPanel.destroy();
     }
   }
 }

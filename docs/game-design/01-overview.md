@@ -146,8 +146,8 @@ This project is designed for iterative AI development:
 |----------|----------|
 | `02-terrain-environment.md` | Wilderness, elevation, water, vegetation |
 | `03-zoning-system.md` | Zone types, densities, placement rules |
-| `04-rci-demand.md` | Demand model, caps, growth triggers |
-| `05-building-growth.md` | Development stages, lot sizes, wealth |
+| `04-rci-demand.md` | RCI demand model, demand caps, wealth levels, industrial types, regional effects |
+| `05-building-growth.md` | Building stages (1-8), lot formation, wealth determination, abandonment, upgrades |
 | `06-transportation.md` | Roads, rail, mass transit, pathfinding |
 | `07-utilities.md` | Power, water, garbage systems |
 | `08-public-services.md` | Police, fire, health, education |

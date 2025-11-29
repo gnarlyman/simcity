@@ -92,6 +92,11 @@ export class TemplateSystem extends BaseSystem {
     
     // Load saved templates from localStorage
     this.loadFromStorage();
+    
+    // If no templates exist, load default starter templates
+    if (this.templates.size === 0) {
+      this.loadDefaultTemplates();
+    }
   }
 
   /**
@@ -225,6 +230,34 @@ export class TemplateSystem extends BaseSystem {
       }
     } catch (error) {
       console.warn('Failed to load templates from localStorage:', error);
+    }
+  }
+
+  /**
+   * Load default starter templates from JSON file
+   */
+  private async loadDefaultTemplates(): Promise<void> {
+    try {
+      const response = await fetch('/templates/starter-templates.json');
+      if (!response.ok) {
+        console.log('No default templates found');
+        return;
+      }
+      
+      const data = await response.json() as Record<string, Template>;
+      for (const [slotStr, template] of Object.entries(data)) {
+        const slot = parseInt(slotStr);
+        if (slot >= 1 && slot <= 9 && template && template.elements) {
+          this.templates.set(slot, template);
+          console.log(`Loaded default template ${slot}: "${template.name}" (${template.elements.length} elements)`);
+        }
+      }
+      
+      // Save to localStorage so they persist
+      this.saveToStorage();
+      console.log('Default starter templates loaded!');
+    } catch (error) {
+      console.log('Could not load default templates:', error);
     }
   }
 
