@@ -466,8 +466,11 @@ export class TerrainSystem extends BaseSystem {
     // Can't build on water
     if (cell.waterDepth > 0) return false;
     
-    // Can't build on steep slopes (simplified check)
-    if (cell.slope !== 'flat') return false;
+    // Can't build on rocks or snow
+    if (cell.surfaceType === 'rock' || cell.surfaceType === 'snow') return false;
+    
+    // Allow building on all slopes for now - the visual slope is just a hint
+    // In a more advanced version, could add extra cost for sloped terrain
     
     return true;
   }

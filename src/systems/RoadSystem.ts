@@ -71,26 +71,9 @@ export class RoadSystem extends BaseSystem {
       this.isPlacingRoads = tool === 'road';
     });
 
-    // Listen for tile clicks to place roads
-    this.eventBus.on(EventTypes.TILE_CLICKED, (event) => {
-      const { position, button } = event.data as {
-        position: GridPosition;
-        button: string;
-      };
-
-      if (button === 'left' && this.isPlacingRoads) {
-        this.placeRoad(position);
-      }
-    });
-
-    // Listen for tile drag to paint roads
-    this.eventBus.on(EventTypes.TILE_DRAG, (event) => {
-      const { position } = event.data as { position: GridPosition };
-      
-      if (this.isPlacingRoads) {
-        this.placeRoad(position);
-      }
-    });
+    // Note: Road placement is now handled by main.ts using two-click mode
+    // The RoadSystem.placeRoad() method is called directly from main.ts
+    // We no longer auto-place roads on TILE_CLICKED or TILE_DRAG events
   }
 
   /**

@@ -12,10 +12,11 @@ import { ZoneSystem, createZoneSystem } from './systems/ZoneSystem';
 import { RoadSystem, createRoadSystem } from './systems/RoadSystem';
 import { RCIDemandSystem, createRCIDemandSystem } from './systems/RCIDemandSystem';
 import { InputManager } from './input/InputManager';
-import { Toolbar, createToolbar } from './ui/Toolbar';
+import { Toolbar, createToolbar, Tool } from './ui/Toolbar';
 import { EventBus, EventTypes } from './core/EventBus';
-import type { GridPosition, TerrainCell, SimulationSpeed } from './data/types';
+import type { GridPosition, TerrainCell, SimulationSpeed, ZoneType } from './data/types';
 import { Grid } from './data/Grid';
+import { ZONE_TYPES } from './data/constants';
 
 /**
  * Game class - main application controller
@@ -42,6 +43,10 @@ class Game {
   
   // Grid toggle state
   private showGridOverlay = false;
+  
+  // Two-click placement mode state
+  private placementStart: GridPosition | null = null;
+  private isInPlacementMode = false;
 
   constructor() {
     // Get canvas element
@@ -152,11 +157,19 @@ class Game {
   private setupEventListeners(): void {
     const eventBus = this.engine.getEventBus();
     
-    // Listen for tile clicks
+    // Listen for tile clicks (single click, no drag)
     eventBus.on(EventTypes.TILE_CLICKED, (event) => {
       const { position, button } = event.data as { position: GridPosition; button: string };
       
       if (button === 'left') {
+        // Get current tool from toolbar
+        const currentTool = this.toolbar?.getCurrentTool();
+        
+        // Handle single-click placement for tools
+        if (currentTool) {
+          this.handleToolAction(currentTool, position);
+        }
+        
         const terrainInfo = this.terrainSystem.getTerrainInfo(position.x, position.y);
         const zoneInfo = this.zoneSystem.getZoneCell(position);
         const roadInfo = this.roadSystem.getRoadCell(position);
@@ -173,6 +186,53 @@ class Game {
           });
         }
       }
+    });
+    
+    // Listen for drag operations (for zone rectangle and road line drawing)
+    eventBus.on(EventTypes.INPUT_DRAG, (event) => {
+      const { button, startTile, currentTile } = event.data as { 
+        button: string; 
+        startTile: GridPosition | null; 
+        currentTile: GridPosition | null;
+      };
+      
+      if (button === 'left' && startTile && currentTile) {
+        const currentTool = this.toolbar?.getCurrentTool();
+        if (currentTool) {
+          // Show preview during drag
+          this.showDragPreview(currentTool, startTile, currentTile);
+        }
+      }
+    });
+    
+    // Listen for drag end (commit the zone/road placement)
+    // Only handles actual drags, not single clicks
+    eventBus.on(EventTypes.INPUT_DRAG_END, (event) => {
+      const { button, startTile, endTile } = event.data as { 
+        button: string; 
+        startTile: GridPosition | null; 
+        endTile: GridPosition | null;
+      };
+      
+      // Skip if in two-click placement mode - that's handled by handleToolAction
+      if (this.isInPlacementMode) {
+        return;
+      }
+      
+      // Skip single-tile "drags" (clicks without actual drag movement)
+      if (button === 'left' && startTile && endTile) {
+        // Only process if it was an actual drag (start != end)
+        const isDrag = startTile.x !== endTile.x || startTile.y !== endTile.y;
+        if (isDrag) {
+          const currentTool = this.toolbar?.getCurrentTool();
+          if (currentTool) {
+            this.handleDragPlacement(currentTool, startTile, endTile);
+          }
+        }
+      }
+      
+      // Clear preview
+      this.renderer.clearHighlight();
     });
     
     // Listen for zone changes to update overlay
@@ -236,6 +296,12 @@ class Game {
         this.engine.togglePause();
         console.log(`Simulation ${this.engine.isPaused() ? 'paused' : 'running'}`);
       }
+      
+      // Escape - Cancel placement mode
+      if (key === 'escape' && this.isInPlacementMode) {
+        this.cancelPlacement();
+        console.log('Placement cancelled');
+      }
     });
     
     // Listen for UI toggle zones event
@@ -298,6 +364,233 @@ class Game {
   }
 
   /**
+   * Handle single-click tool action (two-click placement mode)
+   */
+  private handleToolAction(tool: Tool, position: GridPosition): void {
+    // Query tool: just display info, no placement
+    if (tool.category === 'query') {
+      return;
+    }
+    
+    // For zone, road, and bulldoze tools, use two-click placement
+    if (tool.category === 'zone' || tool.category === 'road' || tool.category === 'bulldoze') {
+      if (!this.isInPlacementMode) {
+        // First click: start placement mode
+        this.placementStart = position;
+        this.isInPlacementMode = true;
+        
+        // Show start tile highlight
+        const terrain = this.terrainSystem.getTerrainInfo(position.x, position.y);
+        if (terrain) {
+          this.renderer.highlightStartTile(position.x, position.y, terrain.elevation);
+        }
+        
+        console.log(`Placement started at (${position.x}, ${position.y})`);
+      } else {
+        // Second click: complete placement
+        if (this.placementStart) {
+          this.completePlacement(tool, this.placementStart, position);
+        }
+        // Reset placement mode and clear start highlight
+        this.placementStart = null;
+        this.isInPlacementMode = false;
+        this.renderer.clearStartHighlight();
+      }
+      return;
+    }
+  }
+
+  /**
+   * Complete a two-click placement
+   */
+  private completePlacement(tool: Tool, start: GridPosition, end: GridPosition): void {
+    console.log(`Placement complete from (${start.x}, ${start.y}) to (${end.x}, ${end.y})`);
+    
+    if (tool.category === 'zone') {
+      // Zones use rectangle
+      const cells = this.getRectangleCells(start, end);
+      for (const cell of cells) {
+        if (this.terrainSystem.isBuildable(cell.x, cell.y)) {
+          this.placeZone(tool, cell);
+        }
+      }
+    } else if (tool.category === 'road') {
+      // Roads use line
+      const cells = this.getLineCells(start, end);
+      for (const cell of cells) {
+        if (this.terrainSystem.isBuildable(cell.x, cell.y)) {
+          this.roadSystem.placeRoad(cell);
+        }
+      }
+    } else if (tool.category === 'bulldoze') {
+      // Bulldoze uses rectangle
+      const cells = this.getRectangleCells(start, end);
+      for (const cell of cells) {
+        this.zoneSystem.removeZone(cell);
+        this.roadSystem.removeRoad(cell);
+      }
+    }
+  }
+
+  /**
+   * Cancel current placement mode
+   */
+  private cancelPlacement(): void {
+    this.placementStart = null;
+    this.isInPlacementMode = false;
+    this.renderer.clearStartHighlight();
+  }
+
+  /**
+   * Show preview during two-click placement mode
+   */
+  private showPlacementPreview(start: GridPosition, end: GridPosition): void {
+    const currentTool = this.toolbar?.getCurrentTool();
+    if (!currentTool || !this.terrainGrid) return;
+
+    // Get cells based on tool type
+    let cells: GridPosition[];
+    if (currentTool.category === 'road') {
+      // Roads use straight line preview
+      cells = this.getLineCells(start, end);
+    } else {
+      // Zones and bulldoze use rectangle preview
+      cells = this.getRectangleCells(start, end);
+    }
+
+    // Build array of tiles with their elevations for multi-tile highlighting
+    const tilesWithElevation = cells.map(cell => {
+      const terrain = this.terrainSystem.getTerrainInfo(cell.x, cell.y);
+      return {
+        x: cell.x,
+        y: cell.y,
+        elevation: terrain?.elevation ?? 250,
+      };
+    });
+
+    // Determine highlight color based on tool category
+    let color = 0x00ff00; // Green for zones
+    if (currentTool.category === 'road') {
+      color = 0x888888; // Gray for roads
+    } else if (currentTool.category === 'bulldoze') {
+      color = 0xff0000; // Red for bulldoze
+    }
+
+    // Highlight all affected tiles
+    this.renderer.highlightMultipleTiles(tilesWithElevation, color, 0.4);
+  }
+
+  /**
+   * Show preview during drag operation
+   */
+  private showDragPreview(tool: Tool, startTile: GridPosition, currentTile: GridPosition): void {
+    // For now, just highlight the current tile
+    // TODO: Add multi-tile preview rendering for rectangles/lines
+    const terrain = this.terrainSystem.getTerrainInfo(currentTile.x, currentTile.y);
+    if (terrain) {
+      this.renderer.highlightTile(currentTile.x, currentTile.y, terrain.elevation);
+    }
+  }
+
+  /**
+   * Handle drag placement (place multiple tiles)
+   */
+  private handleDragPlacement(tool: Tool, startTile: GridPosition, endTile: GridPosition): void {
+    if (tool.category === 'zone') {
+      // Zones use rectangle drag
+      const cells = this.getRectangleCells(startTile, endTile);
+      for (const cell of cells) {
+        if (this.terrainSystem.isBuildable(cell.x, cell.y)) {
+          this.placeZone(tool, cell);
+        }
+      }
+    } else if (tool.category === 'road') {
+      // Roads use line drag
+      const cells = this.getLineCells(startTile, endTile);
+      for (const cell of cells) {
+        if (this.terrainSystem.isBuildable(cell.x, cell.y)) {
+          this.roadSystem.placeRoad(cell);
+        }
+      }
+    } else if (tool.category === 'bulldoze') {
+      // Bulldoze uses rectangle drag
+      const cells = this.getRectangleCells(startTile, endTile);
+      for (const cell of cells) {
+        this.zoneSystem.removeZone(cell);
+        this.roadSystem.removeRoad(cell);
+      }
+    }
+  }
+
+  /**
+   * Place a zone based on tool type
+   */
+  private placeZone(tool: Tool, position: GridPosition): void {
+    // Parse tool ID to get zone type key
+    // Tool ID format: "zone:r-low", "zone:c-medium", "zone:i-high"
+    // Zone type key format: "r-low", "c-medium", "i-high"
+    const zoneKey = tool.id.replace('zone:', '');
+    const zoneType = ZONE_TYPES[zoneKey];
+    
+    if (!zoneType) {
+      console.warn(`Unknown zone type: ${zoneKey}`);
+      return;
+    }
+
+    this.zoneSystem.placeZone(position, zoneType);
+  }
+
+  /**
+   * Get all cells in a rectangle between two points
+   */
+  private getRectangleCells(start: GridPosition, end: GridPosition): GridPosition[] {
+    const minX = Math.min(start.x, end.x);
+    const maxX = Math.max(start.x, end.x);
+    const minY = Math.min(start.y, end.y);
+    const maxY = Math.max(start.y, end.y);
+
+    const cells: GridPosition[] = [];
+    for (let x = minX; x <= maxX; x++) {
+      for (let y = minY; y <= maxY; y++) {
+        cells.push({ x, y });
+      }
+    }
+    return cells;
+  }
+
+  /**
+   * Get all cells in a straight line (horizontal OR vertical only)
+   * Uses whichever axis has the greater distance
+   */
+  private getLineCells(start: GridPosition, end: GridPosition): GridPosition[] {
+    const cells: GridPosition[] = [];
+    
+    const dx = Math.abs(end.x - start.x);
+    const dy = Math.abs(end.y - start.y);
+    
+    // Determine direction: use the axis with greater distance
+    // If horizontal distance >= vertical, draw horizontal line
+    // Otherwise draw vertical line
+    if (dx >= dy) {
+      // Horizontal line (x changes, y stays at start.y)
+      const minX = Math.min(start.x, end.x);
+      const maxX = Math.max(start.x, end.x);
+      for (let x = minX; x <= maxX; x++) {
+        cells.push({ x, y: start.y });
+      }
+    } else {
+      // Vertical line (y changes, x stays at start.x)
+      const minY = Math.min(start.y, end.y);
+      const maxY = Math.max(start.y, end.y);
+      for (let y = minY; y <= maxY; y++) {
+        cells.push({ x: start.x, y });
+      }
+    }
+    
+    return cells;
+  }
+
+  /**
    * Render callback
    */
   private render(deltaTime: number): void {
@@ -332,12 +625,20 @@ class Game {
       const zone = this.zoneSystem.getZoneCell(hoveredTile);
       const road = this.roadSystem.hasRoad(hoveredTile);
       if (terrain) {
-        const zoneStr = zone?.zoneType ? ` | ${zone.zoneType.category[0].toUpperCase()}${zone.developed ? '*' : ''}` : '';
+        const category = zone?.zoneType?.category;
+        const isDeveloped = zone?.developed ?? false;
+        const zoneStr = category 
+          ? ` | ${category[0].toUpperCase()}${isDeveloped ? '*' : ''}` 
+          : '';
         const roadStr = road ? ' | Road' : '';
         hoverInfo = `(${hoveredTile.x}, ${hoveredTile.y})${roadStr}${zoneStr}`;
         
-        // Show hover highlight
-        this.renderer.highlightTile(hoveredTile.x, hoveredTile.y, terrain.elevation);
+        // Show placement preview or single tile hover highlight
+        if (this.isInPlacementMode && this.placementStart && this.terrainGrid) {
+          this.showPlacementPreview(this.placementStart, hoveredTile);
+        } else {
+          this.renderer.highlightTile(hoveredTile.x, hoveredTile.y, terrain.elevation);
+        }
       }
     } else {
       this.renderer.clearHighlight();

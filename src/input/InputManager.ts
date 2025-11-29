@@ -41,6 +41,10 @@ export interface InputState {
   dragStartX: number;
   dragStartY: number;
   
+  // Grid-based drag tracking for tools
+  dragStartTile: GridPosition | null;
+  dragCurrentTile: GridPosition | null;
+  
   // Keyboard modifiers
   shift: boolean;
   ctrl: boolean;
@@ -73,6 +77,8 @@ export class InputManager {
     isDragging: false,
     dragStartX: 0,
     dragStartY: 0,
+    dragStartTile: null,
+    dragCurrentTile: null,
     shift: false,
     ctrl: false,
     alt: false,
@@ -150,6 +156,8 @@ export class InputManager {
     // Start potential drag
     this.state.dragStartX = this.state.mouseX;
     this.state.dragStartY = this.state.mouseY;
+    this.state.dragStartTile = this.camera.screenToGrid(this.state.mouseX, this.state.mouseY);
+    this.state.dragCurrentTile = this.state.dragStartTile;
     this.hasDragged = false;
     
     // Middle button always starts camera drag
@@ -175,11 +183,21 @@ export class InputManager {
     // End drag
     if (this.state.isDragging) {
       this.state.isDragging = false;
+      
+      // Update final drag position
+      this.state.dragCurrentTile = this.camera.screenToGrid(this.state.mouseX, this.state.mouseY);
+      
       this.eventBus.emitType(EventTypes.INPUT_DRAG_END, {
         x: this.state.mouseX,
         y: this.state.mouseY,
         button,
+        startTile: this.state.dragStartTile,
+        endTile: this.state.dragCurrentTile,
       });
+      
+      // Clear drag tiles after emitting
+      this.state.dragStartTile = null;
+      this.state.dragCurrentTile = null;
     }
     
     // If we didn't drag, it's a click
@@ -248,12 +266,17 @@ export class InputManager {
         this.camera.pan(deltaX, deltaY);
       }
       
+      // Update drag current tile for tool operations
+      this.state.dragCurrentTile = this.camera.screenToGrid(this.state.mouseX, this.state.mouseY);
+      
       this.eventBus.emitType(EventTypes.INPUT_DRAG, {
         x: this.state.mouseX,
         y: this.state.mouseY,
         deltaX,
         deltaY,
         button: this.state.middleButton ? 'middle' : 'left',
+        startTile: this.state.dragStartTile,
+        currentTile: this.state.dragCurrentTile,
       });
     }
   };

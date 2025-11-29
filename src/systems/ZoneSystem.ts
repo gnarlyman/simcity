@@ -96,27 +96,9 @@ export class ZoneSystem extends BaseSystem {
       }
     });
 
-    // Listen for tile clicks to place zones
-    this.eventBus.on(EventTypes.TILE_CLICKED, (event) => {
-      const { position, button, modifiers } = event.data as {
-        position: GridPosition;
-        button: string;
-        modifiers: { shift: boolean; ctrl: boolean; alt: boolean };
-      };
-
-      if (button === 'left' && this.selectedZoneType) {
-        this.placeZone(position, this.selectedZoneType);
-      }
-    });
-
-    // Listen for tile drag to paint zones
-    this.eventBus.on(EventTypes.TILE_DRAG, (event) => {
-      const { position } = event.data as { position: GridPosition };
-      
-      if (this.selectedZoneType) {
-        this.placeZone(position, this.selectedZoneType);
-      }
-    });
+    // Note: Zone placement is now handled by main.ts using two-click mode
+    // The ZoneSystem.placeZone() method is called directly from main.ts
+    // We no longer auto-place zones on TILE_CLICKED or TILE_DRAG events
   }
 
   /**

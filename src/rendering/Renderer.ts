@@ -76,6 +76,9 @@ export class Renderer {
   
   /** Hover highlight graphics */
   private hoverHighlight: Graphics | null = null;
+  
+  /** Start position highlight (for two-click placement) */
+  private startHighlight: Graphics | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -781,6 +784,81 @@ export class Renderer {
   clearHighlight(): void {
     if (this.hoverHighlight) {
       this.hoverHighlight.clear();
+    }
+  }
+
+  /**
+   * Highlight the start tile for two-click placement (different color)
+   */
+  highlightStartTile(gridX: number, gridY: number, elevation: number = 0): void {
+    const overlayLayer = this.getLayer('overlay');
+    
+    // Create start highlight graphics if needed
+    if (!this.startHighlight) {
+      this.startHighlight = new Graphics();
+      overlayLayer.addChild(this.startHighlight);
+    }
+    
+    this.startHighlight.clear();
+    
+    // Calculate isometric position
+    const isoX = (gridX - gridY) * HALF_TILE_WIDTH;
+    const isoY = (gridX + gridY) * HALF_TILE_HEIGHT;
+    const elevationOffset = (elevation - 250) / 50 * TILE_DEPTH;
+    
+    // Draw start highlight diamond (cyan/green color to distinguish from hover)
+    this.startHighlight.poly([
+      isoX, isoY - HALF_TILE_HEIGHT - elevationOffset,
+      isoX + HALF_TILE_WIDTH, isoY - elevationOffset,
+      isoX, isoY + HALF_TILE_HEIGHT - elevationOffset,
+      isoX - HALF_TILE_WIDTH, isoY - elevationOffset,
+    ]);
+    this.startHighlight.fill({ color: 0x00ff00, alpha: 0.4 });
+    this.startHighlight.stroke({ color: 0x00ff00, width: 3 });
+  }
+
+  /**
+   * Clear start tile highlight
+   */
+  clearStartHighlight(): void {
+    if (this.startHighlight) {
+      this.startHighlight.clear();
+    }
+  }
+
+  /**
+   * Highlight multiple tiles for placement preview
+   */
+  highlightMultipleTiles(
+    tiles: Array<{ x: number; y: number; elevation: number }>,
+    color: number = 0x00ff00,
+    alpha: number = 0.3
+  ): void {
+    const overlayLayer = this.getLayer('overlay');
+    
+    // Create start highlight graphics if needed (reuse it for preview)
+    if (!this.startHighlight) {
+      this.startHighlight = new Graphics();
+      overlayLayer.addChild(this.startHighlight);
+    }
+    
+    this.startHighlight.clear();
+    
+    for (const tile of tiles) {
+      // Calculate isometric position
+      const isoX = (tile.x - tile.y) * HALF_TILE_WIDTH;
+      const isoY = (tile.x + tile.y) * HALF_TILE_HEIGHT;
+      const elevationOffset = (tile.elevation - 250) / 50 * TILE_DEPTH;
+      
+      // Draw highlight diamond
+      this.startHighlight.poly([
+        isoX, isoY - HALF_TILE_HEIGHT - elevationOffset,
+        isoX + HALF_TILE_WIDTH, isoY - elevationOffset,
+        isoX, isoY + HALF_TILE_HEIGHT - elevationOffset,
+        isoX - HALF_TILE_WIDTH, isoY - elevationOffset,
+      ]);
+      this.startHighlight.fill({ color, alpha });
+      this.startHighlight.stroke({ color, width: 2 });
     }
   }
 

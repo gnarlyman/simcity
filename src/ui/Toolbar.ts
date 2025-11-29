@@ -617,6 +617,13 @@ export class Toolbar {
   }
 
   /**
+   * Get currently selected tool object
+   */
+  getCurrentTool(): Tool | undefined {
+    return TOOLS.find(t => t.id === this.selectedToolId);
+  }
+
+  /**
    * Destroy the toolbar
    */
   destroy(): void {
