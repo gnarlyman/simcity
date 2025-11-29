@@ -3,6 +3,7 @@
  * 
  * HTML-based toolbar for tool selection and game controls.
  * Supports zone tools, road tools, RCI demand display, and simulation controls.
+ * Features dropdown menus, grouped sections, and improved visual hierarchy.
  */
 
 import { EventBus, EventTypes } from '../core/EventBus';
@@ -18,6 +19,19 @@ export interface Tool {
   icon: string;
   category: 'zone' | 'road' | 'bulldoze' | 'query' | 'power' | 'other';
   hotkey?: string;
+  subcategory?: string;
+  cost?: number;
+}
+
+/**
+ * Tool group definition for organizing toolbar sections
+ */
+export interface ToolGroup {
+  id: string;
+  label: string;
+  icon: string;
+  tools: string[];
+  isDropdown?: boolean;
 }
 
 /**
@@ -31,30 +45,42 @@ export const TOOLS: Tool[] = [
   { id: 'bulldoze', name: 'Bulldoze', icon: '🚧', category: 'bulldoze', hotkey: 'b' },
   
   // Roads
-  { id: 'road', name: 'Road', icon: '🛣️', category: 'road', hotkey: 'r' },
+  { id: 'road', name: 'Road', icon: '🛣️', category: 'road', hotkey: 'r', cost: 10 },
   
   // Power infrastructure
-  { id: 'power:line', name: 'Power Line', icon: '⚡', category: 'power', hotkey: 'p' },
-  { id: 'power:coal', name: 'Coal Plant', icon: '🏭', category: 'power' },
-  { id: 'power:gas', name: 'Gas Plant', icon: '⛽', category: 'power' },
-  { id: 'power:nuclear', name: 'Nuclear', icon: '☢️', category: 'power' },
-  { id: 'power:wind', name: 'Wind Farm', icon: '🌬️', category: 'power' },
-  { id: 'power:solar', name: 'Solar Farm', icon: '☀️', category: 'power' },
+  { id: 'power:line', name: 'Power Line', icon: '⚡', category: 'power', hotkey: 'p', cost: 5 },
+  { id: 'power:coal', name: 'Coal Power Plant', icon: '🏭', category: 'power', subcategory: 'plant', cost: 4000 },
+  { id: 'power:gas', name: 'Gas Power Plant', icon: '⛽', category: 'power', subcategory: 'plant', cost: 2000 },
+  { id: 'power:nuclear', name: 'Nuclear Power Plant', icon: '☢️', category: 'power', subcategory: 'plant', cost: 15000 },
+  { id: 'power:wind', name: 'Wind Farm', icon: '🌬️', category: 'power', subcategory: 'plant', cost: 100 },
+  { id: 'power:solar', name: 'Solar Farm', icon: '☀️', category: 'power', subcategory: 'plant', cost: 500 },
   
   // Residential zones
-  { id: 'zone:r-low', name: 'Res Low', icon: '🏠', category: 'zone', hotkey: '1' },
-  { id: 'zone:r-medium', name: 'Res Med', icon: '🏘️', category: 'zone', hotkey: '2' },
-  { id: 'zone:r-high', name: 'Res High', icon: '🏢', category: 'zone', hotkey: '3' },
+  { id: 'zone:r-low', name: 'Low Density Residential', icon: '🏠', category: 'zone', subcategory: 'residential', hotkey: '1' },
+  { id: 'zone:r-medium', name: 'Medium Density Residential', icon: '🏘️', category: 'zone', subcategory: 'residential', hotkey: '2' },
+  { id: 'zone:r-high', name: 'High Density Residential', icon: '🏢', category: 'zone', subcategory: 'residential', hotkey: '3' },
   
   // Commercial zones
-  { id: 'zone:c-low', name: 'Com Low', icon: '🏪', category: 'zone', hotkey: '4' },
-  { id: 'zone:c-medium', name: 'Com Med', icon: '🏬', category: 'zone', hotkey: '5' },
-  { id: 'zone:c-high', name: 'Com High', icon: '🏙️', category: 'zone', hotkey: '6' },
+  { id: 'zone:c-low', name: 'Low Density Commercial', icon: '🏪', category: 'zone', subcategory: 'commercial', hotkey: '4' },
+  { id: 'zone:c-medium', name: 'Medium Density Commercial', icon: '🏬', category: 'zone', subcategory: 'commercial', hotkey: '5' },
+  { id: 'zone:c-high', name: 'High Density Commercial', icon: '🏙️', category: 'zone', subcategory: 'commercial', hotkey: '6' },
   
   // Industrial zones
-  { id: 'zone:i-low', name: 'Ind Low', icon: '🏭', category: 'zone', hotkey: '7' },
-  { id: 'zone:i-medium', name: 'Ind Med', icon: '⚙️', category: 'zone', hotkey: '8' },
-  { id: 'zone:i-high', name: 'Ind High', icon: '🔧', category: 'zone', hotkey: '9' },
+  { id: 'zone:i-low', name: 'Light Industrial', icon: '🏭', category: 'zone', subcategory: 'industrial', hotkey: '7' },
+  { id: 'zone:i-medium', name: 'Medium Industrial', icon: '⚙️', category: 'zone', subcategory: 'industrial', hotkey: '8' },
+  { id: 'zone:i-high', name: 'Heavy Industrial', icon: '🔧', category: 'zone', subcategory: 'industrial', hotkey: '9' },
+];
+
+/**
+ * Tool groups for organizing the toolbar
+ */
+export const TOOL_GROUPS: ToolGroup[] = [
+  { id: 'utilities', label: 'Utilities', icon: '🔧', tools: ['query', 'bulldoze'] },
+  { id: 'infrastructure', label: 'Infrastructure', icon: '🛤️', tools: ['road', 'power:line'] },
+  { id: 'power-plants', label: 'Power', icon: '⚡', tools: ['power:coal', 'power:gas', 'power:nuclear', 'power:wind', 'power:solar'], isDropdown: true },
+  { id: 'residential', label: 'Residential', icon: '🏠', tools: ['zone:r-low', 'zone:r-medium', 'zone:r-high'] },
+  { id: 'commercial', label: 'Commercial', icon: '🏪', tools: ['zone:c-low', 'zone:c-medium', 'zone:c-high'] },
+  { id: 'industrial', label: 'Industrial', icon: '🏭', tools: ['zone:i-low', 'zone:i-medium', 'zone:i-high'] },
 ];
 
 /**
@@ -118,40 +144,57 @@ export class Toolbar {
           bottom: 10px;
           transform: translateX(-50%);
           background: rgba(22, 33, 62, 0.95);
-          border-radius: 8px;
-          padding: 8px 12px;
+          border-radius: 12px;
+          padding: 8px 16px;
           display: flex;
           flex-direction: row;
           align-items: center;
-          gap: 8px;
+          gap: 6px;
           z-index: 1000;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          box-shadow: 0 -2px 10px rgba(0,0,0,0.5);
+          box-shadow: 0 -4px 20px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.1);
         }
         
         .toolbar-divider {
           width: 1px;
-          height: 36px;
-          background: rgba(255,255,255,0.2);
+          height: 44px;
+          background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.2), transparent);
           margin: 0 4px;
         }
         
-        .toolbar-section-label {
-          font-size: 9px;
-          color: rgba(255,255,255,0.5);
-          text-transform: uppercase;
-          writing-mode: vertical-rl;
-          transform: rotate(180deg);
+        /* Tool group container */
+        .tool-group {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 2px;
         }
         
+        .tool-group-label {
+          font-size: 8px;
+          color: rgba(255,255,255,0.5);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+        }
+        
+        .tool-group-buttons {
+          display: flex;
+          gap: 3px;
+          background: rgba(0,0,0,0.2);
+          padding: 3px;
+          border-radius: 8px;
+        }
+        
+        /* Tool button styles */
         .tool-btn {
-          width: 40px;
-          height: 40px;
+          width: 38px;
+          height: 38px;
           border: none;
           border-radius: 6px;
-          background: rgba(15, 52, 96, 0.8);
+          background: rgba(15, 52, 96, 0.9);
           color: white;
-          font-size: 18px;
+          font-size: 17px;
           cursor: pointer;
           transition: all 0.15s ease;
           display: flex;
@@ -163,37 +206,229 @@ export class Toolbar {
         .tool-btn:hover {
           background: rgba(26, 74, 122, 1);
           transform: translateY(-2px);
+          box-shadow: 0 4px 8px rgba(0,0,0,0.3);
         }
         
         .tool-btn.selected {
-          background: #e94560;
-          box-shadow: 0 0 10px rgba(233, 69, 96, 0.5);
+          background: linear-gradient(135deg, #e94560, #c73e54);
+          box-shadow: 0 0 12px rgba(233, 69, 96, 0.6);
         }
         
         .tool-btn .hotkey {
           position: absolute;
           bottom: 1px;
-          right: 2px;
+          right: 3px;
           font-size: 8px;
+          color: rgba(255,255,255,0.4);
+          font-weight: bold;
+        }
+        
+        /* Custom tooltip */
+        .tool-btn .tooltip {
+          position: absolute;
+          bottom: calc(100% + 8px);
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0,0,0,0.95);
+          color: white;
+          padding: 6px 10px;
+          border-radius: 6px;
+          font-size: 11px;
+          white-space: nowrap;
+          pointer-events: none;
+          opacity: 0;
+          transition: opacity 0.15s ease;
+          z-index: 1001;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        }
+        
+        .tool-btn .tooltip::after {
+          content: '';
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          border: 5px solid transparent;
+          border-top-color: rgba(0,0,0,0.95);
+        }
+        
+        .tool-btn .tooltip .cost {
+          color: #ffd700;
+          font-weight: bold;
+          margin-left: 6px;
+        }
+        
+        .tool-btn:hover .tooltip {
+          opacity: 1;
+        }
+        
+        /* Dropdown menu for power plants */
+        .dropdown-container {
+          position: relative;
+        }
+        
+        .dropdown-trigger {
+          width: 42px;
+          height: 38px;
+          border: none;
+          border-radius: 6px;
+          background: rgba(15, 52, 96, 0.9);
+          color: white;
+          font-size: 17px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 2px;
+          position: relative;
+        }
+        
+        .dropdown-trigger:hover {
+          background: rgba(26, 74, 122, 1);
+        }
+        
+        .dropdown-trigger.has-selected {
+          background: linear-gradient(135deg, #e94560, #c73e54);
+          box-shadow: 0 0 12px rgba(233, 69, 96, 0.6);
+        }
+        
+        .dropdown-trigger .dropdown-arrow {
+          font-size: 8px;
+          opacity: 0.7;
+        }
+        
+        .dropdown-menu {
+          position: absolute;
+          bottom: calc(100% + 8px);
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(22, 33, 62, 0.98);
+          border-radius: 10px;
+          padding: 8px;
+          display: none;
+          flex-direction: column;
+          gap: 4px;
+          min-width: 180px;
+          box-shadow: 0 -4px 20px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1);
+          z-index: 1002;
+        }
+        
+        .dropdown-container:hover .dropdown-menu,
+        .dropdown-menu:hover {
+          display: flex;
+        }
+        
+        .dropdown-menu::after {
+          content: '';
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          border: 8px solid transparent;
+          border-top-color: rgba(22, 33, 62, 0.98);
+        }
+        
+        .dropdown-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 12px;
+          border: none;
+          border-radius: 6px;
+          background: rgba(15, 52, 96, 0.6);
+          color: white;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          text-align: left;
+        }
+        
+        .dropdown-item:hover {
+          background: rgba(26, 74, 122, 1);
+        }
+        
+        .dropdown-item.selected {
+          background: linear-gradient(135deg, #e94560, #c73e54);
+        }
+        
+        .dropdown-item .item-icon {
+          font-size: 18px;
+          width: 24px;
+          text-align: center;
+        }
+        
+        .dropdown-item .item-info {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+        }
+        
+        .dropdown-item .item-name {
+          font-size: 12px;
+          font-weight: 500;
+        }
+        
+        .dropdown-item .item-cost {
+          font-size: 10px;
+          color: #ffd700;
+        }
+        
+        /* Zone group with density indicators */
+        .zone-group {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 2px;
+        }
+        
+        .zone-group-label {
+          font-size: 8px;
+          color: rgba(255,255,255,0.5);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+        
+        .zone-group-label .zone-color {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+        }
+        
+        .zone-group-buttons {
+          display: flex;
+          gap: 2px;
+          background: rgba(0,0,0,0.2);
+          padding: 3px;
+          border-radius: 8px;
+        }
+        
+        .zone-group-buttons .tool-btn {
+          width: 32px;
+          height: 32px;
+          font-size: 14px;
+        }
+        
+        /* Zone color indicators */
+        .zone-residential .zone-color { background: #90ee90; }
+        .zone-commercial .zone-color { background: #4169e1; }
+        .zone-industrial .zone-color { background: #ffd700; }
+        
+        /* Density labels */
+        .density-label {
+          position: absolute;
+          top: 1px;
+          left: 3px;
+          font-size: 7px;
+          font-weight: bold;
           color: rgba(255,255,255,0.5);
         }
         
-        .tool-btn[title]:hover::after {
-          content: attr(title);
-          position: absolute;
-          bottom: 100%;
-          left: 50%;
-          transform: translateX(-50%);
-          background: rgba(0,0,0,0.9);
-          color: white;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 11px;
-          white-space: nowrap;
-          margin-bottom: 6px;
-          pointer-events: none;
-        }
-        
+        /* Top bar styles */
         #top-bar {
           position: fixed;
           top: 10px;
@@ -201,22 +436,22 @@ export class Toolbar {
           transform: translateX(-50%);
           width: 66%;
           max-width: 700px;
-          height: 32px;
+          height: 36px;
           background: rgba(22, 33, 62, 0.95);
-          border-radius: 8px;
+          border-radius: 10px;
           display: flex;
           align-items: center;
           padding: 0 16px;
           gap: 16px;
           z-index: 1000;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+          box-shadow: 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.1);
           font-size: 12px;
         }
         
         .stat-display {
           display: flex;
           align-items: center;
-          gap: 4px;
+          gap: 6px;
           color: white;
         }
         
@@ -226,18 +461,19 @@ export class Toolbar {
         
         .stat-value {
           font-weight: bold;
-          font-size: 12px;
+          font-size: 13px;
         }
         
         .demand-container {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 8px;
         }
         
         .demand-label-text {
-          color: rgba(255,255,255,0.7);
+          color: rgba(255,255,255,0.6);
           font-size: 10px;
+          font-weight: 600;
         }
         
         .demand-bar-container {
@@ -247,17 +483,17 @@ export class Toolbar {
         }
         
         .demand-label {
-          font-size: 9px;
-          color: rgba(255,255,255,0.7);
+          font-size: 10px;
+          color: rgba(255,255,255,0.8);
           font-weight: bold;
-          width: 10px;
+          width: 12px;
         }
         
         .demand-bar-bg {
-          width: 12px;
-          height: 24px;
+          width: 14px;
+          height: 28px;
           background: rgba(0,0,0,0.3);
-          border-radius: 2px;
+          border-radius: 3px;
           position: relative;
           overflow: hidden;
         }
@@ -296,18 +532,18 @@ export class Toolbar {
         
         .speed-controls {
           display: flex;
-          gap: 2px;
+          gap: 3px;
           margin-left: auto;
         }
         
         .speed-btn {
-          padding: 4px 8px;
+          padding: 5px 10px;
           border: none;
-          border-radius: 3px;
+          border-radius: 4px;
           background: rgba(15, 52, 96, 0.8);
           color: rgba(255,255,255,0.7);
           cursor: pointer;
-          font-size: 10px;
+          font-size: 11px;
           font-weight: bold;
           transition: all 0.15s ease;
         }
@@ -318,84 +554,60 @@ export class Toolbar {
         }
         
         .speed-btn.active {
-          background: #e94560;
+          background: linear-gradient(135deg, #e94560, #c73e54);
           color: white;
-        }
-        
-        .zone-group {
-          display: flex;
-          gap: 2px;
-        }
-        
-        .zone-group .tool-btn {
-          width: 36px;
-          height: 36px;
-          font-size: 16px;
         }
       </style>
     `;
 
-    // Build toolbar content
+    // Build toolbar content using tool groups
     const toolsHtml: string[] = [];
     
-    // Query and Bulldoze
-    const queryTool = TOOLS.find(t => t.id === 'query')!;
-    const bulldozeTool = TOOLS.find(t => t.id === 'bulldoze')!;
-    const roadTool = TOOLS.find(t => t.id === 'road')!;
-    const powerLineTool = TOOLS.find(t => t.id === 'power:line')!;
-    
-    toolsHtml.push(this.createToolButton(queryTool));
-    toolsHtml.push(this.createToolButton(bulldozeTool));
-    toolsHtml.push('<div class="toolbar-divider"></div>');
-    toolsHtml.push(this.createToolButton(roadTool));
-    toolsHtml.push(this.createToolButton(powerLineTool));
-    toolsHtml.push('<div class="toolbar-divider"></div>');
-    
-    // Power plants
-    toolsHtml.push('<span class="toolbar-section-label">⚡</span>');
-    toolsHtml.push('<div class="zone-group">');
-    TOOLS.filter(t => t.category === 'power' && t.id !== 'power:line').forEach(tool => {
-      toolsHtml.push(this.createToolButton(tool));
+    TOOL_GROUPS.forEach((group, index) => {
+      // Add divider between groups (except before first)
+      if (index > 0) {
+        toolsHtml.push('<div class="toolbar-divider"></div>');
+      }
+      
+      if (group.isDropdown) {
+        // Create dropdown menu for this group
+        toolsHtml.push(this.createDropdownGroup(group));
+      } else if (group.id.includes('residential') || group.id.includes('commercial') || group.id.includes('industrial')) {
+        // Create zone group with color indicator
+        toolsHtml.push(this.createZoneGroup(group));
+      } else {
+        // Create regular tool group
+        toolsHtml.push(this.createToolGroup(group));
+      }
     });
-    toolsHtml.push('</div>');
-    toolsHtml.push('<div class="toolbar-divider"></div>');
-    
-    // Residential zones
-    toolsHtml.push('<span class="toolbar-section-label">R</span>');
-    toolsHtml.push('<div class="zone-group">');
-    TOOLS.filter(t => t.id.startsWith('zone:r')).forEach(tool => {
-      toolsHtml.push(this.createToolButton(tool));
-    });
-    toolsHtml.push('</div>');
-    
-    // Commercial zones
-    toolsHtml.push('<span class="toolbar-section-label">C</span>');
-    toolsHtml.push('<div class="zone-group">');
-    TOOLS.filter(t => t.id.startsWith('zone:c')).forEach(tool => {
-      toolsHtml.push(this.createToolButton(tool));
-    });
-    toolsHtml.push('</div>');
-    
-    // Industrial zones
-    toolsHtml.push('<span class="toolbar-section-label">I</span>');
-    toolsHtml.push('<div class="zone-group">');
-    TOOLS.filter(t => t.id.startsWith('zone:i')).forEach(tool => {
-      toolsHtml.push(this.createToolButton(tool));
-    });
-    toolsHtml.push('</div>');
 
     toolbar.innerHTML += toolsHtml.join('');
 
     // Add to document
     document.body.appendChild(toolbar);
 
-    // Set up button click handlers
+    // Set up button click handlers for regular tools
     TOOLS.forEach(tool => {
       const btn = toolbar.querySelector(`#tool-${tool.id.replace(/:/g, '-')}`) as HTMLButtonElement;
       if (btn) {
-        btn.addEventListener('click', () => this.selectTool(tool.id));
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.selectTool(tool.id);
+        });
         this.toolButtons.set(tool.id, btn);
       }
+    });
+
+    // Set up dropdown item click handlers
+    toolbar.querySelectorAll('.dropdown-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const toolId = (item as HTMLElement).dataset.toolId;
+        if (toolId) {
+          this.selectTool(toolId);
+          this.updateDropdownTrigger(toolId);
+        }
+      });
     });
 
     // Select default tool
@@ -405,14 +617,129 @@ export class Toolbar {
   }
 
   /**
-   * Create a tool button HTML
+   * Create a regular tool group
+   */
+  private createToolGroup(group: ToolGroup): string {
+    const buttons = group.tools.map(toolId => {
+      const tool = TOOLS.find(t => t.id === toolId);
+      return tool ? this.createToolButton(tool) : '';
+    }).join('');
+
+    return `
+      <div class="tool-group">
+        <span class="tool-group-label">${group.label}</span>
+        <div class="tool-group-buttons">
+          ${buttons}
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Create a zone group with color indicator
+   */
+  private createZoneGroup(group: ToolGroup): string {
+    const densityLabels = ['L', 'M', 'H'];
+    const buttons = group.tools.map((toolId, index) => {
+      const tool = TOOLS.find(t => t.id === toolId);
+      if (!tool) return '';
+      const densityLabel = densityLabels[index] || 'L';
+      return this.createZoneButton(tool, densityLabel);
+    }).join('');
+
+    return `
+      <div class="zone-group zone-${group.id}">
+        <span class="zone-group-label">
+          <span class="zone-color"></span>
+          ${group.label}
+        </span>
+        <div class="zone-group-buttons">
+          ${buttons}
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Create a dropdown group (for power plants)
+   */
+  private createDropdownGroup(group: ToolGroup): string {
+    const items = group.tools.map(toolId => {
+      const tool = TOOLS.find(t => t.id === toolId);
+      if (!tool) return '';
+      const cost = tool.cost ? `$${tool.cost.toLocaleString()}` : '';
+      return `
+        <button class="dropdown-item" data-tool-id="${tool.id}">
+          <span class="item-icon">${tool.icon}</span>
+          <div class="item-info">
+            <span class="item-name">${tool.name}</span>
+            ${cost ? `<span class="item-cost">${cost}</span>` : ''}
+          </div>
+        </button>
+      `;
+    }).join('');
+
+    return `
+      <div class="tool-group">
+        <span class="tool-group-label">${group.label}</span>
+        <div class="tool-group-buttons">
+          <div class="dropdown-container" id="dropdown-${group.id}">
+            <button class="dropdown-trigger" id="dropdown-trigger-${group.id}">
+              <span class="trigger-icon">${group.icon}</span>
+              <span class="dropdown-arrow">▼</span>
+            </button>
+            <div class="dropdown-menu">
+              ${items}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Update dropdown trigger when a dropdown item is selected
+   */
+  private updateDropdownTrigger(toolId: string): void {
+    const tool = TOOLS.find(t => t.id === toolId);
+    if (!tool || tool.subcategory !== 'plant') return;
+
+    const trigger = document.querySelector('#dropdown-trigger-power-plants');
+    if (trigger) {
+      const iconSpan = trigger.querySelector('.trigger-icon');
+      if (iconSpan) {
+        iconSpan.textContent = tool.icon;
+      }
+      trigger.classList.add('has-selected');
+    }
+  }
+
+  /**
+   * Create a tool button HTML with tooltip
    */
   private createToolButton(tool: Tool): string {
     const id = tool.id.replace(/:/g, '-');
+    const costText = tool.cost ? `<span class="cost">$${tool.cost}</span>` : '';
     return `
-      <button class="tool-btn" id="tool-${id}" title="${tool.name}${tool.hotkey ? ` (${tool.hotkey})` : ''}">
+      <button class="tool-btn" id="tool-${id}">
         ${tool.icon}
         ${tool.hotkey ? `<span class="hotkey">${tool.hotkey}</span>` : ''}
+        <span class="tooltip">${tool.name}${tool.hotkey ? ` (${tool.hotkey.toUpperCase()})` : ''}${costText}</span>
+      </button>
+    `;
+  }
+
+  /**
+   * Create a zone button with density label
+   */
+  private createZoneButton(tool: Tool, densityLabel: string): string {
+    const id = tool.id.replace(/:/g, '-');
+    return `
+      <button class="tool-btn" id="tool-${id}">
+        ${tool.icon}
+        <span class="density-label">${densityLabel}</span>
+        ${tool.hotkey ? `<span class="hotkey">${tool.hotkey}</span>` : ''}
+        <span class="tooltip">${tool.name}${tool.hotkey ? ` (${tool.hotkey})` : ''}</span>
       </button>
     `;
   }
