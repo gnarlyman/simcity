@@ -6,9 +6,9 @@
  */
 
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import type { RenderLayer, Bounds, GridPosition, TerrainCell } from '../data/types';
+import type { RenderLayer, Bounds, GridPosition, TerrainCell, ZoneCell, RoadConnections } from '../data/types';
 import { RENDER_LAYER_ORDER } from '../data/types';
-import { TERRAIN_COLORS, UI_COLORS } from '../data/constants';
+import { TERRAIN_COLORS, UI_COLORS, ZONE_COLORS } from '../data/constants';
 import { TILE_WIDTH, TILE_HEIGHT, HALF_TILE_WIDTH, HALF_TILE_HEIGHT, TILE_DEPTH } from '../data/constants';
 import { IsometricCamera } from './IsometricCamera';
 import { Grid } from '../data/Grid';
@@ -53,11 +53,23 @@ export class Renderer {
   /** Grid overlay graphics */
   private gridOverlay: Graphics | null = null;
   
+  /** Zone overlay graphics */
+  private zoneOverlay: Graphics | null = null;
+  
+  /** Building graphics */
+  private buildingGraphics: Graphics | null = null;
+  
+  /** Road graphics */
+  private roadGraphics: Graphics | null = null;
+  
   /** Debug text */
   private debugText: Text | null = null;
   
   /** Show grid overlay */
   private showGrid = false;
+  
+  /** Show zone overlay */
+  private showZones = true;
   
   /** Show debug info */
   private showDebug = true;
@@ -195,6 +207,23 @@ export class Renderer {
   }
 
   /**
+   * Toggle zone overlay
+   */
+  setShowZones(show: boolean): void {
+    this.showZones = show;
+    if (this.zoneOverlay) {
+      this.zoneOverlay.visible = show;
+    }
+  }
+
+  /**
+   * Check if zones are visible
+   */
+  isShowingZones(): boolean {
+    return this.showZones;
+  }
+
+  /**
    * Render terrain from a terrain grid
    */
   renderTerrain(terrainGrid: Grid<TerrainCell>): void {
@@ -310,6 +339,280 @@ export class Renderer {
   }
 
   /**
+   * Render zone overlay
+   */
+  renderZones(zoneGrid: Grid<ZoneCell>, terrainGrid: Grid<TerrainCell>): void {
+    const zonesLayer = this.getLayer('zones');
+
+    // Clear existing zone overlay
+    if (this.zoneOverlay) {
+      zonesLayer.removeChild(this.zoneOverlay);
+      this.zoneOverlay.destroy();
+    }
+
+    this.zoneOverlay = new Graphics();
+    this.zoneOverlay.visible = this.showZones;
+    zonesLayer.addChild(this.zoneOverlay);
+
+    const width = zoneGrid.width;
+    const height = zoneGrid.height;
+
+    // Render in isometric order (back to front)
+    for (let sum = 0; sum < width + height - 1; sum++) {
+      for (let x = 0; x <= sum; x++) {
+        const y = sum - x;
+        if (x < width && y < height) {
+          const zoneCell = zoneGrid.getXY(x, y);
+          if (zoneCell.zoneType) {
+            const terrainCell = terrainGrid.tryGetXY(x, y);
+            this.renderZoneTile(x, y, zoneCell, terrainCell);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Render a single zone tile
+   */
+  private renderZoneTile(
+    worldX: number,
+    worldY: number,
+    zoneCell: ZoneCell,
+    terrainCell: TerrainCell | undefined
+  ): void {
+    if (!this.zoneOverlay || !zoneCell.zoneType) return;
+
+    // Calculate screen position
+    const isoX = (worldX - worldY) * HALF_TILE_WIDTH;
+    const isoY = (worldX + worldY) * HALF_TILE_HEIGHT;
+
+    // Adjust for elevation
+    const elevation = terrainCell?.elevation ?? 250;
+    const elevationOffset = (elevation - 250) / 50 * TILE_DEPTH;
+
+    // Get zone color
+    const color = zoneCell.zoneType.color;
+    const alpha = zoneCell.developed ? 0.3 : 0.5;
+
+    // Draw zone overlay
+    this.zoneOverlay.poly([
+      isoX, isoY - HALF_TILE_HEIGHT - elevationOffset,
+      isoX + HALF_TILE_WIDTH, isoY - elevationOffset,
+      isoX, isoY + HALF_TILE_HEIGHT - elevationOffset,
+      isoX - HALF_TILE_WIDTH, isoY - elevationOffset,
+    ]);
+    this.zoneOverlay.fill({ color, alpha });
+    this.zoneOverlay.stroke({ color: this.darkenColor(color, 0.3), width: 1, alpha: 0.8 });
+
+    // If developed, draw a simple building indicator
+    if (zoneCell.developed) {
+      this.renderSimpleBuilding(isoX, isoY - elevationOffset, zoneCell);
+    }
+  }
+
+  /**
+   * Render a simple building representation
+   */
+  private renderSimpleBuilding(isoX: number, isoY: number, zoneCell: ZoneCell): void {
+    if (!this.zoneOverlay || !zoneCell.zoneType) return;
+
+    const category = zoneCell.zoneType.category;
+    const density = zoneCell.zoneType.density;
+
+    // Building height based on density
+    const heightMultiplier = density === 'low' ? 1 : density === 'medium' ? 2 : 3;
+    const buildingHeight = 8 * heightMultiplier;
+
+    // Building colors based on category
+    let roofColor: number;
+    let wallColor: number;
+
+    switch (category) {
+      case 'residential':
+        roofColor = 0xa52a2a; // Brown roof
+        wallColor = 0xf5f5dc; // Beige walls
+        break;
+      case 'commercial':
+        roofColor = 0x4169e1; // Blue roof
+        wallColor = 0xe0e0e0; // Gray walls
+        break;
+      case 'industrial':
+        roofColor = 0x808080; // Gray roof
+        wallColor = 0xd2b48c; // Tan walls
+        break;
+      default:
+        roofColor = 0x808080;
+        wallColor = 0xc0c0c0;
+    }
+
+    const halfWidth = HALF_TILE_WIDTH * 0.6;
+    const halfHeight = HALF_TILE_HEIGHT * 0.6;
+
+    // Draw building base (left side)
+    this.zoneOverlay.poly([
+      isoX - halfWidth, isoY,
+      isoX, isoY + halfHeight,
+      isoX, isoY + halfHeight - buildingHeight,
+      isoX - halfWidth, isoY - buildingHeight,
+    ]);
+    this.zoneOverlay.fill(this.darkenColor(wallColor, 0.2));
+
+    // Draw building base (right side)
+    this.zoneOverlay.poly([
+      isoX + halfWidth, isoY,
+      isoX, isoY + halfHeight,
+      isoX, isoY + halfHeight - buildingHeight,
+      isoX + halfWidth, isoY - buildingHeight,
+    ]);
+    this.zoneOverlay.fill(wallColor);
+
+    // Draw roof
+    this.zoneOverlay.poly([
+      isoX, isoY - halfHeight - buildingHeight,
+      isoX + halfWidth, isoY - buildingHeight,
+      isoX, isoY + halfHeight - buildingHeight,
+      isoX - halfWidth, isoY - buildingHeight,
+    ]);
+    this.zoneOverlay.fill(roofColor);
+  }
+
+  /**
+   * Update zone rendering (call when zones change)
+   */
+  updateZoneOverlay(zoneGrid: Grid<ZoneCell>, terrainGrid: Grid<TerrainCell>): void {
+    this.renderZones(zoneGrid, terrainGrid);
+  }
+
+  /**
+   * Road cell interface (matches RoadSystem)
+   */
+  private roadCellHasRoad(cell: { hasRoad: boolean }): boolean {
+    return cell.hasRoad;
+  }
+
+  /**
+   * Render roads overlay
+   */
+  renderRoads(
+    roadGrid: Grid<{ position: GridPosition; hasRoad: boolean; connections: RoadConnections }>,
+    terrainGrid: Grid<TerrainCell>
+  ): void {
+    const roadsLayer = this.getLayer('roads');
+
+    // Clear existing road graphics
+    if (this.roadGraphics) {
+      roadsLayer.removeChild(this.roadGraphics);
+      this.roadGraphics.destroy();
+    }
+
+    this.roadGraphics = new Graphics();
+    roadsLayer.addChild(this.roadGraphics);
+
+    const width = roadGrid.width;
+    const height = roadGrid.height;
+
+    // Render in isometric order (back to front)
+    for (let sum = 0; sum < width + height - 1; sum++) {
+      for (let x = 0; x <= sum; x++) {
+        const y = sum - x;
+        if (x < width && y < height) {
+          const roadCell = roadGrid.getXY(x, y);
+          if (roadCell.hasRoad) {
+            const terrainCell = terrainGrid.tryGetXY(x, y);
+            this.renderRoadTile(x, y, roadCell, terrainCell);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Render a single road tile
+   */
+  private renderRoadTile(
+    worldX: number,
+    worldY: number,
+    roadCell: { hasRoad: boolean; connections: RoadConnections },
+    terrainCell: TerrainCell | undefined
+  ): void {
+    if (!this.roadGraphics) return;
+
+    // Calculate screen position
+    const isoX = (worldX - worldY) * HALF_TILE_WIDTH;
+    const isoY = (worldX + worldY) * HALF_TILE_HEIGHT;
+
+    // Adjust for elevation
+    const elevation = terrainCell?.elevation ?? 250;
+    const elevationOffset = (elevation - 250) / 50 * TILE_DEPTH;
+
+    const roadColor = 0x444444; // Dark gray
+    const lineColor = 0xffffff; // White road markings
+
+    // Draw road base
+    this.roadGraphics.poly([
+      isoX, isoY - HALF_TILE_HEIGHT - elevationOffset,
+      isoX + HALF_TILE_WIDTH, isoY - elevationOffset,
+      isoX, isoY + HALF_TILE_HEIGHT - elevationOffset,
+      isoX - HALF_TILE_WIDTH, isoY - elevationOffset,
+    ]);
+    this.roadGraphics.fill(roadColor);
+    this.roadGraphics.stroke({ color: 0x333333, width: 1 });
+
+    // Draw road markings based on connections
+    const { north, south, east, west } = roadCell.connections;
+    const markingColor = 0xcccccc;
+    const markingWidth = 2;
+
+    // Center point
+    const cx = isoX;
+    const cy = isoY - elevationOffset;
+
+    // Draw center line markings
+    if (north || south || east || west) {
+      // Draw a small dot in center
+      this.roadGraphics.circle(cx, cy - HALF_TILE_HEIGHT / 2, 2);
+      this.roadGraphics.fill(markingColor);
+    }
+
+    // Draw connection lines
+    if (north) {
+      // Line to north
+      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
+      this.roadGraphics.lineTo(cx - HALF_TILE_WIDTH / 2, cy - HALF_TILE_HEIGHT);
+      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
+    }
+    if (south) {
+      // Line to south
+      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
+      this.roadGraphics.lineTo(cx + HALF_TILE_WIDTH / 2, cy);
+      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
+    }
+    if (east) {
+      // Line to east
+      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
+      this.roadGraphics.lineTo(cx + HALF_TILE_WIDTH / 2, cy - HALF_TILE_HEIGHT);
+      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
+    }
+    if (west) {
+      // Line to west
+      this.roadGraphics.moveTo(cx, cy - HALF_TILE_HEIGHT / 2);
+      this.roadGraphics.lineTo(cx - HALF_TILE_WIDTH / 2, cy);
+      this.roadGraphics.stroke({ color: markingColor, width: markingWidth, alpha: 0.5 });
+    }
+  }
+
+  /**
+   * Update road rendering (call when roads change)
+   */
+  updateRoadOverlay(
+    roadGrid: Grid<{ position: GridPosition; hasRoad: boolean; connections: RoadConnections }>,
+    terrainGrid: Grid<TerrainCell>
+  ): void {
+    this.renderRoads(roadGrid, terrainGrid);
+  }
+
+  /**
    * Get terrain color based on surface type
    */
   private getTerrainColor(cell: TerrainCell): number {
@@ -417,6 +720,9 @@ export class Renderer {
     }
     this.terrainGraphics = null;
     this.gridOverlay = null;
+    this.zoneOverlay = null;
+    this.buildingGraphics = null;
+    this.roadGraphics = null;
   }
 
   /**

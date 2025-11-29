@@ -1,16 +1,21 @@
 /**
  * SimCity Clone - Main Entry Point
  * 
- * Initializes the game engine, terrain system, renderer, and input handling.
- * Creates a functional terrain viewer with procedural generation and camera controls.
+ * Initializes the game engine, systems, renderer, and UI.
+ * Integrates terrain, zoning, roads, RCI demand, and building development.
  */
 
 import { Engine, createEngine } from './core/Engine';
 import { Renderer } from './rendering/Renderer';
 import { TerrainSystem } from './systems/TerrainSystem';
+import { ZoneSystem, createZoneSystem } from './systems/ZoneSystem';
+import { RoadSystem, createRoadSystem } from './systems/RoadSystem';
+import { RCIDemandSystem, createRCIDemandSystem } from './systems/RCIDemandSystem';
 import { InputManager } from './input/InputManager';
+import { Toolbar, createToolbar } from './ui/Toolbar';
 import { EventBus, EventTypes } from './core/EventBus';
-import type { GridPosition, TerrainCell } from './data/types';
+import type { GridPosition, TerrainCell, SimulationSpeed } from './data/types';
+import { Grid } from './data/Grid';
 
 /**
  * Game class - main application controller
@@ -19,11 +24,24 @@ class Game {
   private engine: Engine;
   private renderer: Renderer;
   private terrainSystem: TerrainSystem;
+  private zoneSystem: ZoneSystem;
+  private roadSystem: RoadSystem;
+  private rciDemandSystem: RCIDemandSystem;
   private inputManager: InputManager | null = null;
+  private toolbar: Toolbar | null = null;
   private canvas: HTMLCanvasElement;
+  
+  // Grid references
+  private terrainGrid: Grid<TerrainCell> | null = null;
   
   // UI elements
   private loadingElement: HTMLElement | null;
+  
+  // Zone overlay toggle
+  private showZoneOverlay = true;
+  
+  // Grid toggle state
+  private showGridOverlay = false;
 
   constructor() {
     // Get canvas element
@@ -38,9 +56,16 @@ class Game {
     this.engine = createEngine();
     this.renderer = new Renderer(this.canvas);
     this.terrainSystem = new TerrainSystem();
+    this.zoneSystem = createZoneSystem();
+    this.roadSystem = createRoadSystem();
+    this.rciDemandSystem = createRCIDemandSystem();
     
-    // Register terrain system with engine
-    this.engine.getWorld().addSystem(this.terrainSystem);
+    // Register systems with engine (order matters for initialization)
+    const world = this.engine.getWorld();
+    world.addSystem(this.terrainSystem);
+    world.addSystem(this.roadSystem);
+    world.addSystem(this.zoneSystem);
+    world.addSystem(this.rciDemandSystem);
   }
 
   /**
@@ -60,18 +85,29 @@ class Game {
         this.engine.getEventBus()
       );
       
+      // Create toolbar UI
+      this.toolbar = createToolbar(this.engine.getEventBus());
+      
       // Set up event listeners
       this.setupEventListeners();
       
       // Generate initial terrain (64x64 map)
-      const terrainGrid = this.terrainSystem.generate({
+      this.terrainGrid = this.terrainSystem.generate({
         width: 64,
         height: 64,
         seed: Math.random(),
       });
       
+      // Initialize grids to match terrain
+      this.zoneSystem.initializeGrid(64, 64);
+      this.roadSystem.initializeGrid(64, 64);
+      
       // Render terrain
-      this.renderer.renderTerrain(terrainGrid);
+      this.renderer.renderTerrain(this.terrainGrid);
+      
+      // Initial overlays render (empty)
+      this.updateZoneOverlay();
+      this.updateRoadOverlay();
       
       // Set up render callback
       this.engine.setRenderCallback((deltaTime) => this.render(deltaTime));
@@ -93,7 +129,12 @@ class Game {
       console.log('  - Mouse Wheel: Zoom');
       console.log('  - Right-click + Drag: Pan camera');
       console.log('  - G: Toggle grid overlay');
+      console.log('  - Z: Toggle zone overlay');
       console.log('  - Space: Regenerate terrain');
+      console.log('  - R: Road tool');
+      console.log('  - 1-9: Select zone tools');
+      console.log('  - Q: Query tool');
+      console.log('  - B: Bulldoze tool');
       
     } catch (error) {
       console.error('Failed to initialize game:', error);
@@ -117,15 +158,53 @@ class Game {
       
       if (button === 'left') {
         const terrainInfo = this.terrainSystem.getTerrainInfo(position.x, position.y);
+        const zoneInfo = this.zoneSystem.getZoneCell(position);
+        const roadInfo = this.roadSystem.getRoadCell(position);
+        
         if (terrainInfo) {
           console.log(`Clicked tile (${position.x}, ${position.y}):`, {
             elevation: Math.round(terrainInfo.elevation),
             surface: terrainInfo.surfaceType,
             water: terrainInfo.waterDepth > 0 ? `depth: ${terrainInfo.waterDepth.toFixed(1)}` : 'none',
-            trees: terrainInfo.treeCount,
             buildable: this.terrainSystem.isBuildable(position.x, position.y),
+            road: roadInfo?.hasRoad ? 'yes' : 'no',
+            zone: zoneInfo?.zoneType ? `${zoneInfo.zoneType.category} (${zoneInfo.zoneType.density})` : 'none',
+            developed: zoneInfo?.developed ?? false,
           });
         }
+      }
+    });
+    
+    // Listen for zone changes to update overlay
+    eventBus.on(EventTypes.ZONE_CREATED, () => {
+      this.updateZoneOverlay();
+      // Update road access for zones
+      this.zoneSystem.updateRoadAccess(this.roadSystem.getRoadPositions());
+    });
+    
+    eventBus.on(EventTypes.ZONE_DELETED, () => {
+      this.updateZoneOverlay();
+    });
+    
+    // Listen for road changes
+    eventBus.on('road:created', () => {
+      this.updateRoadOverlay();
+      // Update road access for all zones when roads change
+      this.zoneSystem.updateRoadAccess(this.roadSystem.getRoadPositions());
+    });
+    
+    eventBus.on('road:deleted', () => {
+      this.updateRoadOverlay();
+      this.zoneSystem.updateRoadAccess(this.roadSystem.getRoadPositions());
+    });
+    
+    // Listen for building development to update overlay
+    eventBus.on(EventTypes.BUILDING_DEVELOPED, () => {
+      this.updateZoneOverlay();
+      
+      // Update population display
+      if (this.toolbar) {
+        this.toolbar.updatePopulation(this.rciDemandSystem.getPopulation());
       }
     });
     
@@ -135,9 +214,16 @@ class Game {
       
       // G - Toggle grid
       if (key === 'g') {
-        const showGrid = !this.renderer.getCamera().getZoom(); // Placeholder toggle
-        this.renderer.setShowGrid(true);
-        console.log('Grid overlay toggled');
+        this.showGridOverlay = !this.showGridOverlay;
+        this.renderer.setShowGrid(this.showGridOverlay);
+        console.log(`Grid overlay ${this.showGridOverlay ? 'shown' : 'hidden'}`);
+      }
+      
+      // Z - Toggle zone overlay
+      if (key === 'z') {
+        this.showZoneOverlay = !this.showZoneOverlay;
+        this.renderer.setShowZones(this.showZoneOverlay);
+        console.log(`Zone overlay ${this.showZoneOverlay ? 'shown' : 'hidden'}`);
       }
       
       // Space - Regenerate terrain
@@ -151,6 +237,40 @@ class Game {
         console.log(`Simulation ${this.engine.isPaused() ? 'paused' : 'running'}`);
       }
     });
+    
+    // Listen for UI toggle zones event
+    eventBus.on('ui:toggle_zones', () => {
+      this.showZoneOverlay = !this.showZoneOverlay;
+      this.renderer.setShowZones(this.showZoneOverlay);
+      console.log(`Zone overlay ${this.showZoneOverlay ? 'shown' : 'hidden'}`);
+    });
+    
+    // Listen for simulation speed changes from UI
+    eventBus.on('ui:speed_request', (event) => {
+      const { speed } = event.data as { speed: SimulationSpeed };
+      this.engine.setSpeed(speed);
+      console.log(`Simulation speed: ${speed}`);
+    });
+  }
+
+  /**
+   * Update zone overlay rendering
+   */
+  private updateZoneOverlay(): void {
+    const zoneGrid = this.zoneSystem.getZoneGrid();
+    if (zoneGrid && this.terrainGrid) {
+      this.renderer.updateZoneOverlay(zoneGrid, this.terrainGrid);
+    }
+  }
+
+  /**
+   * Update road overlay rendering
+   */
+  private updateRoadOverlay(): void {
+    const roadGrid = this.roadSystem.getRoadGrid();
+    if (roadGrid && this.terrainGrid) {
+      this.renderer.updateRoadOverlay(roadGrid, this.terrainGrid);
+    }
   }
 
   /**
@@ -159,13 +279,21 @@ class Game {
   private regenerateTerrain(): void {
     console.log('Regenerating terrain...');
     
-    const terrainGrid = this.terrainSystem.generate({
+    this.terrainGrid = this.terrainSystem.generate({
       width: 64,
       height: 64,
       seed: Math.random(),
     });
     
-    this.renderer.renderTerrain(terrainGrid);
+    // Reset grids
+    this.zoneSystem.initializeGrid(64, 64);
+    this.roadSystem.initializeGrid(64, 64);
+    
+    // Re-render
+    this.renderer.renderTerrain(this.terrainGrid);
+    this.updateZoneOverlay();
+    this.updateRoadOverlay();
+    
     console.log('Terrain regenerated!');
   }
 
@@ -181,6 +309,18 @@ class Game {
     // Update renderer
     this.renderer.update(deltaTime);
     
+    // Check if zones need re-rendering
+    if (this.zoneSystem.isDirty()) {
+      this.updateZoneOverlay();
+      this.zoneSystem.clearDirty();
+    }
+    
+    // Check if roads need re-rendering
+    if (this.roadSystem.isDirty()) {
+      this.updateRoadOverlay();
+      this.roadSystem.clearDirty();
+    }
+    
     // Update debug text
     const stats = this.engine.getStats();
     const camera = this.renderer.getCamera();
@@ -189,18 +329,27 @@ class Game {
     let hoverInfo = 'None';
     if (hoveredTile) {
       const terrain = this.terrainSystem.getTerrainInfo(hoveredTile.x, hoveredTile.y);
+      const zone = this.zoneSystem.getZoneCell(hoveredTile);
+      const road = this.roadSystem.hasRoad(hoveredTile);
       if (terrain) {
-        hoverInfo = `(${hoveredTile.x}, ${hoveredTile.y}) - ${terrain.surfaceType}, elev: ${Math.round(terrain.elevation)}`;
+        const zoneStr = zone?.zoneType ? ` | ${zone.zoneType.category[0].toUpperCase()}${zone.developed ? '*' : ''}` : '';
+        const roadStr = road ? ' | Road' : '';
+        hoverInfo = `(${hoveredTile.x}, ${hoveredTile.y})${roadStr}${zoneStr}`;
       }
     }
     
     this.renderer.updateDebugText({
       FPS: stats.fps,
       Zoom: camera.getZoom().toFixed(2),
-      Entities: stats.entityCount,
       Tile: hoverInfo,
-      Speed: this.engine.getSpeed(),
+      Pop: this.rciDemandSystem.getPopulation(),
+      Roads: this.roadSystem.getRoadStats().totalTiles,
     });
+    
+    // Update toolbar population
+    if (this.toolbar) {
+      this.toolbar.updatePopulation(this.rciDemandSystem.getPopulation());
+    }
   }
 
   /**
@@ -219,11 +368,11 @@ class Game {
     if (this.inputManager) {
       this.inputManager.destroy();
     }
+    if (this.toolbar) {
+      this.toolbar.destroy();
+    }
   }
 }
-
-// Global toggle variable
-let gridVisible = false;
 
 /**
  * Main entry point
