@@ -1,158 +1,243 @@
 /**
  * SimCity Clone - Main Entry Point
  * 
- * This is the entry point for the game application.
- * It initializes the game engine, renderer, and starts the game loop.
+ * Initializes the game engine, terrain system, renderer, and input handling.
+ * Creates a functional terrain viewer with procedural generation and camera controls.
  */
 
-import { Application, Graphics, Text, TextStyle } from 'pixi.js';
-
-// Game configuration
-const CONFIG = {
-  // Display
-  backgroundColor: 0x1a1a2e,
-  
-  // Tile dimensions (isometric 2:1)
-  tileWidth: 64,
-  tileHeight: 32,
-  
-  // Map
-  defaultMapSize: 64,
-  
-  // Simulation
-  simulationTickMs: 100,
-};
+import { Engine, createEngine } from './core/Engine';
+import { Renderer } from './rendering/Renderer';
+import { TerrainSystem } from './systems/TerrainSystem';
+import { InputManager } from './input/InputManager';
+import { EventBus, EventTypes } from './core/EventBus';
+import type { GridPosition, TerrainCell } from './data/types';
 
 /**
- * Initialize and start the game
+ * Game class - main application controller
  */
-async function main(): Promise<void> {
-  console.log('SimCity Clone - Initializing...');
+class Game {
+  private engine: Engine;
+  private renderer: Renderer;
+  private terrainSystem: TerrainSystem;
+  private inputManager: InputManager | null = null;
+  private canvas: HTMLCanvasElement;
   
-  // Hide loading indicator
-  const loadingElement = document.getElementById('loading');
-  
-  // Get canvas element
-  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
-  if (!canvas) {
-    throw new Error('Canvas element not found');
+  // UI elements
+  private loadingElement: HTMLElement | null;
+
+  constructor() {
+    // Get canvas element
+    this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+    if (!this.canvas) {
+      throw new Error('Canvas element not found');
+    }
+    
+    this.loadingElement = document.getElementById('loading');
+    
+    // Create core systems
+    this.engine = createEngine();
+    this.renderer = new Renderer(this.canvas);
+    this.terrainSystem = new TerrainSystem();
+    
+    // Register terrain system with engine
+    this.engine.getWorld().addSystem(this.terrainSystem);
   }
-  
-  // Initialize PixiJS application
-  const app = new Application();
-  
-  try {
-    await app.init({
-      canvas,
-      background: CONFIG.backgroundColor,
-      resizeTo: window,
-      antialias: true,
-      resolution: window.devicePixelRatio || 1,
-      autoDensity: true,
+
+  /**
+   * Initialize the game
+   */
+  async init(): Promise<void> {
+    console.log('SimCity Clone - Initializing...');
+    
+    try {
+      // Initialize renderer
+      await this.renderer.init();
+      
+      // Set up input handling
+      this.inputManager = new InputManager(
+        this.canvas,
+        this.renderer.getCamera(),
+        this.engine.getEventBus()
+      );
+      
+      // Set up event listeners
+      this.setupEventListeners();
+      
+      // Generate initial terrain (64x64 map)
+      const terrainGrid = this.terrainSystem.generate({
+        width: 64,
+        height: 64,
+        seed: Math.random(),
+      });
+      
+      // Render terrain
+      this.renderer.renderTerrain(terrainGrid);
+      
+      // Set up render callback
+      this.engine.setRenderCallback((deltaTime) => this.render(deltaTime));
+      
+      // Handle window resize
+      window.addEventListener('resize', () => this.handleResize());
+      
+      // Hide loading indicator
+      if (this.loadingElement) {
+        this.loadingElement.style.display = 'none';
+      }
+      
+      // Start the engine
+      this.engine.start();
+      
+      console.log('Game initialized successfully!');
+      console.log('Controls:');
+      console.log('  - WASD/Arrow Keys: Pan camera');
+      console.log('  - Mouse Wheel: Zoom');
+      console.log('  - Right-click + Drag: Pan camera');
+      console.log('  - G: Toggle grid overlay');
+      console.log('  - Space: Regenerate terrain');
+      
+    } catch (error) {
+      console.error('Failed to initialize game:', error);
+      if (this.loadingElement) {
+        this.loadingElement.textContent = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        this.loadingElement.style.color = '#ff4444';
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Set up event listeners
+   */
+  private setupEventListeners(): void {
+    const eventBus = this.engine.getEventBus();
+    
+    // Listen for tile clicks
+    eventBus.on(EventTypes.TILE_CLICKED, (event) => {
+      const { position, button } = event.data as { position: GridPosition; button: string };
+      
+      if (button === 'left') {
+        const terrainInfo = this.terrainSystem.getTerrainInfo(position.x, position.y);
+        if (terrainInfo) {
+          console.log(`Clicked tile (${position.x}, ${position.y}):`, {
+            elevation: Math.round(terrainInfo.elevation),
+            surface: terrainInfo.surfaceType,
+            water: terrainInfo.waterDepth > 0 ? `depth: ${terrainInfo.waterDepth.toFixed(1)}` : 'none',
+            trees: terrainInfo.treeCount,
+            buildable: this.terrainSystem.isBuildable(position.x, position.y),
+          });
+        }
+      }
     });
-  } catch (e) {
-    console.error('Failed to init PixiJS:', e);
-    throw e;
+    
+    // Listen for keyboard input
+    eventBus.on(EventTypes.INPUT_KEY_DOWN, (event) => {
+      const { key } = event.data as { key: string };
+      
+      // G - Toggle grid
+      if (key === 'g') {
+        const showGrid = !this.renderer.getCamera().getZoom(); // Placeholder toggle
+        this.renderer.setShowGrid(true);
+        console.log('Grid overlay toggled');
+      }
+      
+      // Space - Regenerate terrain
+      if (key === ' ') {
+        this.regenerateTerrain();
+      }
+      
+      // P - Toggle pause
+      if (key === 'p') {
+        this.engine.togglePause();
+        console.log(`Simulation ${this.engine.isPaused() ? 'paused' : 'running'}`);
+      }
+    });
   }
-  
-  // Hide loading indicator after initialization
-  if (loadingElement) {
-    loadingElement.style.display = 'none';
-  }
-  
-  console.log('PixiJS initialized:', app.screen.width, 'x', app.screen.height);
-  
-  // Add a test graphic to verify rendering works
-  const graphics = new Graphics();
-  
-  // Draw an isometric tile at the center of the screen
-  const centerX = app.screen.width / 2;
-  const centerY = app.screen.height / 2;
-  
-  // Draw a simple isometric grid for testing
-  drawIsometricGrid(graphics, centerX, centerY, 10, 10);
-  
-  app.stage.addChild(graphics);
-  
-  // Display initialization message
-  const style = new TextStyle({
-    fontFamily: 'Arial',
-    fontSize: 24,
-    fill: 0xffffff,
-    align: 'center',
-  });
-  
-  const text = new Text({
-    text: 'SimCity Clone - Engine Ready\nPress any key to start',
-    style,
-  });
-  text.anchor.set(0.5);
-  text.x = centerX;
-  text.y = 50;
-  app.stage.addChild(text);
-  
-  // Set up game loop
-  app.ticker.add(() => {
-    // Game update logic will go here
-    // For now, just a placeholder
-  });
-  
-  // Handle window resize
-  window.addEventListener('resize', () => {
-    // Renderer auto-resizes, but we may need to update camera/UI
-    console.log('Window resized:', window.innerWidth, 'x', window.innerHeight);
-  });
-  
-  console.log('Game ready!');
-}
 
-/**
- * Draw an isometric grid for testing
- */
-function drawIsometricGrid(
-  graphics: Graphics,
-  centerX: number,
-  centerY: number,
-  gridWidth: number,
-  gridHeight: number
-): void {
-  const tileW = CONFIG.tileWidth;
-  const tileH = CONFIG.tileHeight;
-  
-  // Calculate world to screen transform for isometric view
-  const worldToScreen = (wx: number, wy: number) => ({
-    x: centerX + (wx - wy) * (tileW / 2),
-    y: centerY + (wx + wy) * (tileH / 2) - (gridHeight * tileH / 2),
-  });
-  
-  // Draw tiles
-  for (let y = 0; y < gridHeight; y++) {
-    for (let x = 0; x < gridWidth; x++) {
-      const pos = worldToScreen(x, y);
-      
-      // Alternate colors for checkerboard pattern
-      const isEven = (x + y) % 2 === 0;
-      const fillColor = isEven ? 0x2d5a27 : 0x3d7a37; // Green grass colors
-      
-      // Draw isometric tile using PixiJS v8 API
-      graphics.poly([
-        pos.x, pos.y - tileH / 2,           // Top
-        pos.x + tileW / 2, pos.y,           // Right
-        pos.x, pos.y + tileH / 2,           // Bottom
-        pos.x - tileW / 2, pos.y,           // Left
-      ]);
-      graphics.fill(fillColor);
-      graphics.stroke({ color: 0x1a3a17, width: 1 });
+  /**
+   * Regenerate terrain with new seed
+   */
+  private regenerateTerrain(): void {
+    console.log('Regenerating terrain...');
+    
+    const terrainGrid = this.terrainSystem.generate({
+      width: 64,
+      height: 64,
+      seed: Math.random(),
+    });
+    
+    this.renderer.renderTerrain(terrainGrid);
+    console.log('Terrain regenerated!');
+  }
+
+  /**
+   * Render callback
+   */
+  private render(deltaTime: number): void {
+    // Update input
+    if (this.inputManager) {
+      this.inputManager.update(deltaTime);
+    }
+    
+    // Update renderer
+    this.renderer.update(deltaTime);
+    
+    // Update debug text
+    const stats = this.engine.getStats();
+    const camera = this.renderer.getCamera();
+    const hoveredTile = this.inputManager?.getHoveredTile();
+    
+    let hoverInfo = 'None';
+    if (hoveredTile) {
+      const terrain = this.terrainSystem.getTerrainInfo(hoveredTile.x, hoveredTile.y);
+      if (terrain) {
+        hoverInfo = `(${hoveredTile.x}, ${hoveredTile.y}) - ${terrain.surfaceType}, elev: ${Math.round(terrain.elevation)}`;
+      }
+    }
+    
+    this.renderer.updateDebugText({
+      FPS: stats.fps,
+      Zoom: camera.getZoom().toFixed(2),
+      Entities: stats.entityCount,
+      Tile: hoverInfo,
+      Speed: this.engine.getSpeed(),
+    });
+  }
+
+  /**
+   * Handle window resize
+   */
+  private handleResize(): void {
+    this.renderer.handleResize();
+  }
+
+  /**
+   * Destroy the game and clean up
+   */
+  destroy(): void {
+    this.engine.destroy();
+    this.renderer.destroy();
+    if (this.inputManager) {
+      this.inputManager.destroy();
     }
   }
 }
 
+// Global toggle variable
+let gridVisible = false;
+
+/**
+ * Main entry point
+ */
+async function main(): Promise<void> {
+  const game = new Game();
+  
+  // Store game instance globally for debugging
+  (window as unknown as { game: Game }).game = game;
+  
+  await game.init();
+}
+
 // Start the application
 main().catch((error) => {
-  console.error('Failed to initialize game:', error);
-  const loadingElement = document.getElementById('loading');
-  if (loadingElement) {
-    loadingElement.textContent = `Error: ${error.message}`;
-    loadingElement.style.color = '#ff4444';
-  }
+  console.error('Failed to start game:', error);
 });

@@ -56,6 +56,11 @@ npm run dev
 # Start development server with hot reload
 npm run dev
 
+# Run in background (useful for automated testing/CI)
+nohup npm run dev > /tmp/vite.log 2>&1 &
+sleep 3  # Wait for server to start
+cat /tmp/vite.log | tail -5  # Check it's running
+
 # Build for production
 npm run build
 
